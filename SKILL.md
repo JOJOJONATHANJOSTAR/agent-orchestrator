@@ -113,5 +113,5 @@ Python ≥ 3.10；`claude` 与 `codex` 已安装登录；目标最好是 git 仓
 ## 架构与迭代
 
 底层分层的 `orchestrator/` 包（cli → engine → planner → agents/gates/gitrepo → prompts/graph →
-process/config/budget/artifacts/util），依赖单向无环，详见 `references/architecture.md`。
+process/config/budget/artifacts/util），依赖单向无环，详见 `README.md` 的「项目结构」。
 **迭代只改仓库的 `orchestrator/` 包**，本 skill 入口无需改动；新增对外参数时同步更新本文件的参数参考。
