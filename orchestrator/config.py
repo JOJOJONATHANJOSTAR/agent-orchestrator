@@ -19,6 +19,7 @@ DEFAULTS = {
     "budget_usd": 0.0,           # 累计成本上限（美元）；0 = 不限
     "budget_seconds": 0,         # 累计耗时上限（秒）；0 = 不限
     "rollback_on_fail": False,   # 最终失败时是否把工作区回滚到最佳快照
+    "continue_on_fail": False,   # 子任务失败时，是否仍尝试其下游（默认级联跳过）
 }
 
 
@@ -39,11 +40,17 @@ class Config:
     budget_usd: float
     budget_seconds: int
     rollback_on_fail: bool
+    continue_on_fail: bool
     decompose: bool
     dry_run: bool
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器。
+
+    Returns:
+        argparse.ArgumentParser: 已注册全部参数的解析器。
+    """
     ap = argparse.ArgumentParser(description="Claude 规划 + Codex 实现 的编排器")
     ap.add_argument("task", help="要交给这套框架完成的需求")
     ap.add_argument("--repo", default=DEFAULTS["repo"], help="目标仓库路径")
@@ -71,6 +78,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="累计耗时上限（秒）；0=不限")
     ap.add_argument("--rollback-on-fail", action="store_true",
                     help="最终失败时把工作区回滚到最近一次测试通过的快照（否则起点）")
+    ap.add_argument("--continue-on-fail", action="store_true",
+                    help="某子任务失败时，仍尝试依赖它的下游子任务（仅告警，不整支跳过）；"
+                         "适合下游与失败者无强耦合的情况，避免一个卡点拖垮全站收尾类任务")
     ap.add_argument("--decompose", action="store_true",
                     help="先把需求拆成子任务 DAG，按拓扑序逐个实现（失败只影响其下游）")
     ap.add_argument("--dry-run", action="store_true",
@@ -79,7 +89,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args: argparse.Namespace) -> Config:
-    """把 argparse 结果转成 Config，并构建验收门链。"""
+    """把 argparse 结果转成 Config，并构建验收门链。
+
+    Args:
+        args (argparse.Namespace): build_arg_parser 解析出的参数。
+
+    Returns:
+        Config: 一次运行的不可变配置。
+
+    Raises:
+        SystemExit: ``--gate`` 项不符合 ``名字=命令`` 格式。
+    """
     if args.gate:
         gates = []
         for g in args.gate:
@@ -98,5 +118,6 @@ def config_from_args(args: argparse.Namespace) -> Config:
         claude_timeout=args.claude_timeout, codex_timeout=args.codex_timeout,
         gate_timeout=args.gate_timeout, budget_usd=args.budget_usd,
         budget_seconds=args.budget_seconds, rollback_on_fail=args.rollback_on_fail,
+        continue_on_fail=args.continue_on_fail,
         decompose=args.decompose, dry_run=args.dry_run,
     )

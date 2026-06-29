@@ -31,7 +31,15 @@ DAG_PLANNER_SYS = (
 
 
 def format_findings(findings: list) -> str:
-    """把结构化评审清单渲染成给 Codex 的逐条修复指令。"""
+    """把结构化评审清单渲染成给 Codex 的逐条修复指令。
+
+    Args:
+        findings (list): 评审 findings，每项理想为 ``{file, where, issue, fix}`` 的 dict；
+            容忍非 dict 项（直接 str 化）。
+
+    Returns:
+        str: 多行编号修复指令文本。
+    """
     lines = []
     for i, f in enumerate(findings, 1):
         if not isinstance(f, dict):
@@ -48,7 +56,18 @@ def format_findings(findings: list) -> str:
 def build_next_instruction(brief: str, diff: str, gate_results: list,
                            verdict: dict, git_ok: bool) -> tuple[str, str]:
     """失败模式分流：根据「空改动 / 验收门挂 / 评审要改」生成针对性的下一轮指令。
-    返回 (失败模式标签, 给 Codex 的指令)。"""
+
+    Args:
+        brief (str): 子任务原始改动说明。
+        diff (str): 本轮工作区 diff。
+        gate_results (list): GateRunner.run 返回的各门结果。
+        verdict (dict): 评审裁决（含 findings / comments）。
+        git_ok (bool): 是否为可用 git 仓库（决定能否据空 diff 判定"无改动"）。
+
+    Returns:
+        tuple[str, str]: (失败模式标签, 给 Codex 的下一轮指令)。失败模式标签 ∈
+        ``{empty_diff, gate_failed, review_revise}``。
+    """
     findings_txt = format_findings(verdict.get("findings", [])) or verdict.get("comments", "")
 
     if git_ok and not diff.strip():

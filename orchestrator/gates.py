@@ -13,8 +13,12 @@ class GateRunner:
         self.cfg = cfg
 
     def run(self) -> tuple[bool, list[dict]]:
-        """返回 (是否全通过, 每个门的结果列表)。每个结果为 {name, cmd, passed, log}。
-        超时按未通过处理。"""
+        """依次执行配置的每个验收门命令。超时按未通过处理。
+
+        Returns:
+            tuple[bool, list[dict]]: (是否全部通过, 各门结果列表)。每个结果形如
+            ``{"name", "cmd", "passed", "log"}``，log 取输出末尾 2000 字符。
+        """
         results = []
         for name, cmd in self.cfg.gates:
             try:
@@ -29,12 +33,27 @@ class GateRunner:
 
 
 def gates_summary(results: list[dict]) -> str:
-    """一行汇总：tests ✅ | lint ❌ | types ✅"""
+    """一行汇总，如 ``tests ✅ | lint ❌ | types ✅``。
+
+    Args:
+        results (list[dict]): GateRunner.run 返回的结果列表。
+
+    Returns:
+        str: 各门名称加通过/未过图标的一行字符串。
+    """
     return " | ".join(f"{r['name']} {'✅' if r['passed'] else '❌'}" for r in results)
 
 
 def gates_detail(results: list[dict], failed_only: bool = False) -> str:
-    """给 agent 看的多门详情文本块。"""
+    """给 agent 看的多门详情文本块（含命令与日志）。
+
+    Args:
+        results (list[dict]): GateRunner.run 返回的结果列表。
+        failed_only (bool): 为 True 时只渲染未通过的门。
+
+    Returns:
+        str: 多门详情文本；无可渲染项时返回 ``（无）``。
+    """
     blocks = []
     for r in results:
         if failed_only and r["passed"]:

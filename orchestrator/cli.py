@@ -19,6 +19,14 @@ from .util import setup_console
 
 
 def main(argv: list[str] | None = None) -> None:
+    """编排器入口：解析参数、装配依赖、规划→执行 DAG→收尾。
+
+    Args:
+        argv (list[str] | None): 命令行参数；None 时取 sys.argv。
+
+    Returns:
+        None
+    """
     args = build_arg_parser().parse_args(argv)
     setup_console()
     cfg = config_from_args(args)

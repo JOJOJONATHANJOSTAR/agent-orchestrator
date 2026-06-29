@@ -26,7 +26,11 @@ class Result(NamedTuple):
 
 def child_env() -> dict:
     """子进程环境：强制 Python 子进程用 UTF-8 输出，使其打印的中文等被正确解码。
-    非 Python 工具会忽略这些变量，不受影响。"""
+    非 Python 工具会忽略这些变量，不受影响。
+
+    Returns:
+        dict: 在当前环境副本上叠加 PYTHONUTF8/PYTHONIOENCODING 的环境变量字典。
+    """
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -34,7 +38,14 @@ def child_env() -> dict:
 
 
 def decode(b: bytes | None) -> str:
-    """稳健解码：UTF-8 优先；失败回退系统区域编码（Windows 常见 cp936/GBK）；仍失败则替换。"""
+    """稳健解码：UTF-8 优先；失败回退系统区域编码（Windows 常见 cp936/GBK）；仍失败则替换。
+
+    Args:
+        b (bytes | None): 子进程输出的原始字节；None/空时返回空串。
+
+    Returns:
+        str: 解码后的文本；所有候选编码都失败时用 UTF-8 + replace 兜底，不抛异常。
+    """
     if not b:
         return ""
     try:
@@ -50,17 +61,39 @@ def decode(b: bytes | None) -> str:
 
 
 def strip_ansi(text: str) -> str:
+    """剥离文本中的 ANSI CSI/OSC 控制序列（彩色、光标移动等），便于干净落盘。
+
+    Args:
+        text (str): 可能含 ANSI 转义序列的文本。
+
+    Returns:
+        str: 去除控制序列后的纯文本。
+    """
     return _ANSI.sub("", text)
 
 
 def run(cmd, *, clean: bool = False, **kw) -> Result:
-    """统一执行子进程：注入 UTF-8 子进程环境、捕获字节后稳健解码。clean=True 时剥离 ANSI。
-    透传 cwd / shell / timeout 给 subprocess.run；超时照常抛 TimeoutExpired 交调用方处理。
+    """统一执行子进程：注入 UTF-8 子进程环境、捕获字节后稳健解码。
 
-    stdin 默认接到 DEVNULL：headless 调用永不需要交互输入，若子进程（如 codex）误等 stdin，
-    给它 EOF 而不是让整条流水线无限挂死。"""
+    透传 cwd / shell / timeout / input 等给 subprocess.run。stdin 默认接到 DEVNULL：
+    headless 调用永不需要交互输入，若子进程（如 codex）误等 stdin，给它 EOF 而不是让整条
+    流水线无限挂死；显式传 input 时则交由 subprocess 自管 stdin（两者互斥）。
+
+    Args:
+        cmd (list[str] | str): 要执行的命令；list 为参数向量，str 需配合 shell=True。
+        clean (bool): 为 True 时剥离 stdout/stderr 里的 ANSI 控制序列。
+        **kw: 透传给 subprocess.run 的关键字参数（cwd / shell / timeout / input 等）。
+
+    Returns:
+        Result: 具名元组 (returncode, stdout, stderr)，后两者已解码为 str。
+
+    Raises:
+        subprocess.TimeoutExpired: 传入 timeout 且子进程超时（不在此捕获，交调用方处理）。
+    """
     kw.setdefault("env", child_env())
-    kw.setdefault("stdin", subprocess.DEVNULL)
+    # 提供 input 时由 subprocess 自管 stdin（input 与 stdin 互斥）；否则接 DEVNULL 防误等输入。
+    if "input" not in kw:
+        kw.setdefault("stdin", subprocess.DEVNULL)
     p = subprocess.run(cmd, capture_output=True, **kw)   # text=False → 拿原始字节
     out, err = decode(p.stdout), decode(p.stderr)
     if clean:

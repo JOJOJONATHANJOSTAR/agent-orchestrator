@@ -5,7 +5,12 @@ from .process import Result, run
 
 
 class GitRepo:
-    """封装目标仓库的 git 操作。非 git 仓库时各操作安全降级为 no-op。"""
+    """封装目标仓库的 git 操作。非 git 仓库时各操作安全降级为 no-op。
+
+    Args:
+        repo (str): 目标仓库路径。
+        run_id (str): 本次运行 id，用于快照标签前缀（``orch/<run_id>/<label>``）。
+    """
 
     def __init__(self, repo: str, run_id: str):
         self.repo = repo
@@ -18,7 +23,11 @@ class GitRepo:
     def diff(self) -> str:
         """工作区改动。包含新建(未跟踪)文件——用 intent-to-add 让它们出现在 diff，
         否则新建文件（很常见）会被 `git diff` 漏掉，导致评审看不到、误判空 diff。
-        排除编排器自己的 runs/ 日志目录。"""
+        排除编排器自己的 runs/ 日志目录。
+
+        Returns:
+            str: 统一 diff 文本；非 git 仓库返回空串。
+        """
         if not self.enabled:
             return ""
         untracked = [f for f in self._git("ls-files", "--others", "--exclude-standard")
@@ -29,7 +38,14 @@ class GitRepo:
 
     def snapshot(self, label: str) -> str | None:
         """非破坏性快照：用 `git stash create` 生成游离 commit 捕获当前工作区，再打标签
-        防止被 gc。返回标签名；无改动或非 git 仓库时返回 None。"""
+        防止被 gc。
+
+        Args:
+            label (str): 快照标签后缀（最终标签为 ``orch/<run_id>/<label>``）。
+
+        Returns:
+            str | None: 快照标签名；无改动或非 git 仓库时返回 None。
+        """
         if not self.enabled:
             return None
         sha = self._git("stash", "create").stdout.strip()
@@ -40,7 +56,14 @@ class GitRepo:
         return tag
 
     def restore(self, tag: str | None) -> bool:
-        """把工作区中被追踪的文件恢复到某个快照标签。回滚前先再快照一次确保可逆。"""
+        """把工作区中被追踪的文件恢复到某个快照标签。回滚前先再快照一次确保可逆。
+
+        Args:
+            tag (str | None): 目标快照标签；None 时直接返回 False。
+
+        Returns:
+            bool: 恢复是否成功（非 git 仓库或无 tag 时为 False）。
+        """
         if not self.enabled or not tag:
             return False
         self.snapshot("pre_rollback")

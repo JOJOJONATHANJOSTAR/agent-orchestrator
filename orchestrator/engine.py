@@ -10,7 +10,17 @@ from .prompts import build_next_instruction
 
 
 class SubtaskRunner:
-    """对单个子任务跑「实现→门链→评审」多轮循环。只依赖注入进来的抽象。"""
+    """对单个子任务跑「实现→门链→评审」多轮循环。只依赖注入进来的抽象。
+
+    Args:
+        cfg: 运行配置（max_rounds 等）。
+        budget (Budget): 成本/耗时账本。
+        artifacts (ArtifactLog): 产物落盘。
+        git (GitRepo): 快照与 diff。
+        coder (Coder): 代码实现适配器。
+        gates (Gates): 验收门链。
+        reviewer (Reviewer): 评审者。
+    """
 
     def __init__(self, cfg, budget, artifacts, git, coder, gates, reviewer):
         self.cfg = cfg
@@ -22,7 +32,16 @@ class SubtaskRunner:
         self.reviewer = reviewer
 
     def run(self, subtask: dict, context: str) -> tuple[str, str | None]:
-        """返回 (状态, 最近一次全门通过的快照tag)；状态 ∈ {"done","failed","budget"}。"""
+        """对单个子任务跑「实现→门链→评审」多轮循环，直到通过或耗尽轮数/预算。
+
+        Args:
+            subtask (dict): 子任务，含 id / brief / acceptance_criteria。
+            context (str): 前置子任务上下文（build_context 产出）。
+
+        Returns:
+            tuple[str, str | None]: (状态, 最近一次全门通过的快照 tag)。状态 ∈
+            ``{"done", "failed", "budget"}``；无可用快照时 tag 为 None。
+        """
         sid = subtask["id"]
         brief = subtask["brief"]
         acceptance = subtask["acceptance_criteria"]
@@ -80,6 +99,16 @@ class SubtaskRunner:
 
 @dataclass
 class DagResult:
+    """DAG 执行结果汇总。
+
+    Attributes:
+        done (set): 完成的子任务 id。
+        failed (set): 失败或被跳过的子任务 id。
+        all_done (bool): 是否所有子任务都完成。
+        stopped_budget (bool): 是否因预算用尽提前停止。
+        best_tag (str | None): 最近一次全门通过的快照 tag（回滚目标）。
+        initial_tag (str | None): 起点快照 tag。
+    """
     done: set = field(default_factory=set)
     failed: set = field(default_factory=set)
     all_done: bool = False
@@ -97,20 +126,34 @@ class DagEngine:
         self.runner = runner
 
     def run(self, subtasks: list[dict]) -> DagResult:
+        """按拓扑序逐个跑子任务，并按依赖处理失败级联。
+
+        默认下游依赖失败者会被整支跳过；cfg.continue_on_fail 为真时改为仅告警、仍尝试
+        （并在上下文标注前置未完成）。
+
+        Args:
+            subtasks (list[dict]): 已拓扑排序的子任务列表。
+
+        Returns:
+            DagResult: 完成/失败集合、是否全完成、是否因预算停止、最佳与初始快照 tag。
+        """
         res = DagResult(initial_tag=self.git.snapshot("initial"))
-        res.best_tag = res.initial_tag
+        res.best_tag = res.initial_tag # 初始快照可作为回滚目标
         completed: list[dict] = []
 
         for st in subtasks:
             blocked = [d for d in st["deps"] if d in res.failed]
-            if blocked:
+            if blocked and not self.cfg.continue_on_fail:
                 print(f"\n⏭ 跳过子任务 [{st['id']}]：前置未完成 {blocked}")
                 res.failed.add(st["id"])
                 continue
 
             header = f"子任务 [{st['id']}] {st['title']}" if self.cfg.decompose else "实现"
             print(f"\n========== {header} ==========")
-            context = build_context(completed, st["deps"])
+            if blocked:
+                print(f"⚠ 前置未完成 {blocked}，--continue-on-fail 下仍尝试本子任务"
+                      f"（上下文可能不完整）。")
+            context = build_context(completed, st["deps"], blocked)
             status, best = self.runner.run(st, context)
             if best:
                 res.best_tag = best
