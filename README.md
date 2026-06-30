@@ -69,6 +69,10 @@ python claude_codex_orchestrator.py "需求…" \
 # 子任务 DAG：先把大需求拆成带依赖的子任务，按拓扑序逐个实现
 python claude_codex_orchestrator.py "做一个带登录的待办应用" --decompose
 
+# 静态站冒烟门：构建后校验所有 HTML/CSS 的本地资源引用是否真实存在（抓"构建过但运行时 404"）
+python claude_codex_orchestrator.py "重构落地页" \
+    --gate build="npm run build" --gate smoke="python scripts/smoke_static.py dist"
+
 # 加成本与耗时预算，失败时自动回滚工作区
 python claude_codex_orchestrator.py "需求…" \
     --budget-usd 2.0 --budget-seconds 1800 --rollback-on-fail
@@ -132,6 +136,9 @@ python claude_codex_orchestrator.py "随便写点啥" --dry-run
 - **只读隔离**：Claude 仅 `Read,Grep,Glob`，保证“写代码”这件事只由 Codex 做。
 - **验收门链**：`--gate` 把测试 / lint / 类型检查等拆成多个独立的门，逐个跑、分别记录
   通过/失败，任一不过即未达标；只把**失败门**的输出反馈给 Codex，更聚焦。
+- **静态站冒烟门**（`scripts/smoke_static.py`）：零依赖（仅标准库）的现成门，遍历构建产物里所有
+  HTML/CSS，校验本地资源引用（`img/script/link/source` + `url()` + `srcset`）是否都解析到真实
+  文件——补上"build 能过、运行时却 404"的盲区（外链/锚点自动跳过）。当作 `--gate` 用即可。
 - **结构化评审**：评审器输出 `findings` 清单（文件 / 定位 / 问题 / 修复指令），渲染成
   逐条指令交给 Codex，而非一段自由文本。
 - **失败模式分流**：每轮失败会被归类为 `empty_diff`（没产生改动）/ `gate_failed`（门没过）/

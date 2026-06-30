@@ -72,6 +72,11 @@ python claude_codex_orchestrator.py "requirement…" \
 # Subtask DAG: break a large requirement into dependent subtasks, implement in topological order
 python claude_codex_orchestrator.py "Build a todo app with login" --decompose
 
+# Static-site smoke gate: after build, verify every local asset reference in HTML/CSS actually exists
+# (catches "build passes but 404s at runtime")
+python claude_codex_orchestrator.py "Rework the landing page" \
+    --gate build="npm run build" --gate smoke="python scripts/smoke_static.py dist"
+
 # Add cost and time budgets; roll back the working tree on final failure
 python claude_codex_orchestrator.py "requirement…" \
     --budget-usd 2.0 --budget-seconds 1800 --rollback-on-fail
@@ -142,6 +147,11 @@ before committing.
 - **Gate chain**: `--gate` splits tests / lint / type checks into independent gates, run one by
   one with pass/fail recorded separately; any failure = not done, and only the **failing** gates'
   output is fed back to Codex for sharper focus.
+- **Static-site smoke gate** (`scripts/smoke_static.py`): a ready-made, dependency-free
+  (stdlib-only) gate that walks all HTML/CSS in the build output and verifies local asset
+  references (`img/script/link/source` + `url()` + `srcset`) all resolve to real files — covering
+  the "build passes but 404s at runtime" blind spot (external/anchor refs are skipped). Use it as
+  a `--gate`.
 - **Structured review**: the reviewer outputs a `findings` list (file / locator / issue / fix
   instruction), rendered into itemized instructions for Codex rather than free-form prose.
 - **Failure-mode routing**: each round's failure is classified as `empty_diff` (no changes) /
