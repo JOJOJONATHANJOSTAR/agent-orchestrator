@@ -302,13 +302,12 @@ class CodexClient:
         self.artifacts.write(f"{label}_codex_stdout.txt", r.stdout)
         self.artifacts.write(f"{label}_codex_stderr.txt", r.stderr)
         if self.ledger is not None:
-            # codex 不报 USD 成本（吃订阅额度）；token 从 stdout best-effort 解析，抓不到记 0
-            tk = parse_codex_tokens(r.stdout)
-            inp, out = tk["input"], tk["output"]
-            if not inp and not out and tk["total"]:
-                inp = tk["total"]  # 只拿到合计、无输入/输出拆分：整体计入输入层，至少不丢失
+            # codex 不报 USD 成本（吃订阅额度）；token 合计 best-effort 解析，抓不到记 0。
+            # 注意：codex exec 把「tokens used\n<数字>」打到 stderr 而非 stdout，故两者合并解析。
+            # codex 无 input/output 拆分，合计整体计入输入层（codex 改代码绝大头本就是上下文输入）。
+            total = parse_codex_tokens(r.stdout + "\n" + r.stderr)["total"]
             self.ledger.record("codex", model=str(self.cfg.codex_model or ""),
-                               input_tokens=inp, output_tokens=out, duration_s=dt)
+                               input_tokens=total, duration_s=dt)
         if r.returncode != 0:
             sys.exit(f"[codex] 调用失败: {r.stderr.strip()}")
         tail = r.stdout.strip().splitlines()[-8:]

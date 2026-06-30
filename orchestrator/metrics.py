@@ -42,10 +42,10 @@ class Event:
     ok: bool | None = None
 
 
-# codex exec 的 stdout 里 token 用量行，best-effort 解析（格式随 codex 版本变动，抓到多少算多少）
+# codex exec 输出里的 token 用量合计，best-effort（格式随版本变动）。实测仅给「tokens used\n<数字>」，
+# 不含 input/output 拆分；故只可靠解析合计——刻意不猜 input/output（松散正则会误匹配 diff 内的
+# <input …> 等，得不偿失）。`\s` 跨行容忍「tokens used」与数字分两行。
 _CODEX_TOTAL = re.compile(r"tokens?\s+used[^\d]{0,12}([\d,]+)", re.I)
-_CODEX_INPUT = re.compile(r"input[^\d]{0,16}([\d,]+)", re.I)
-_CODEX_OUTPUT = re.compile(r"output[^\d]{0,16}([\d,]+)", re.I)
 
 
 def _to_int(s: str | None) -> int:
@@ -58,29 +58,25 @@ def _to_int(s: str | None) -> int:
         return 0
 
 
-def parse_codex_tokens(stdout: str) -> dict:
-    """从 codex exec 的 stdout 里**尽力**抓 token 用量。抓不到的字段为 0，绝不抛异常。
+def parse_codex_tokens(text: str) -> dict:
+    """从 codex exec 的输出里**尽力**抓 token 用量合计。抓不到返回 0，绝不抛异常。
 
-    codex 的用量行格式随版本变动（如 ``tokens used: 12,345`` / ``input: 1234 output: 5678``），
-    这里用宽松正则尽力解析，取最后一次匹配（通常是最终累计值）。解析失败只意味着报告里
-    codex token 记 0，而非中断主流程。
+    注意：实测 ``codex exec`` 把用量打到 **stderr** 而非 stdout，且分两行
+    （``tokens used`` 一行、数字 ``26,698`` 在下一行），故调用方应把 stdout+stderr 合并传入。
+    这里只可靠解析**合计**（``tokens used`` 是特定短语，不会误匹配 diff）；codex 不给 input/output
+    拆分，刻意不去猜（松散正则会把 diff 里的 ``<input …>`` 误判成 token 数）。``\\s`` 跨行容忍分行。
+    取最后一次匹配（通常是最终累计值）。解析失败只意味着报告里 codex token 记 0，而非中断主流程。
 
     Args:
-        stdout (str): codex exec 的标准输出（建议已剥离 ANSI）。
+        text (str): codex exec 的输出（建议 stdout+stderr 合并、已剥离 ANSI）。
 
     Returns:
-        dict: ``{"input", "output", "total"}``，均为 int；缺失字段为 0。
-              total 优先取显式 "tokens used"，否则回退 input+output。
+        dict: ``{"total"}`` 一个键，int；抓不到为 0。
     """
-    if not stdout:
-        return {"input": 0, "output": 0, "total": 0}
-    tot = _CODEX_TOTAL.findall(stdout)
-    inp = _CODEX_INPUT.findall(stdout)
-    out = _CODEX_OUTPUT.findall(stdout)
-    input_tokens = _to_int(inp[-1]) if inp else 0
-    output_tokens = _to_int(out[-1]) if out else 0
-    total = _to_int(tot[-1]) if tot else (input_tokens + output_tokens)
-    return {"input": input_tokens, "output": output_tokens, "total": total}
+    if not text:
+        return {"total": 0}
+    tot = _CODEX_TOTAL.findall(text)
+    return {"total": _to_int(tot[-1]) if tot else 0}
 
 
 class MetricsLedger:
