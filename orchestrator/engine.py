@@ -89,14 +89,27 @@ class SubtaskRunner:
 
             print(f"  💳 累计成本 ${self.budget.usd:.4f} | 耗时 {self.budget.elapsed():.0f}s")
 
-            self._begin("review", sid, rnd)
-            verdict = self.reviewer.review(acceptance, diff, gates_detail(gate_results), label)
-            print(f"  Claude 评审：{verdict['verdict']}"
-                  + (f"（{len(verdict['findings'])} 条意见）" if verdict["findings"] else ""))
-
-            if passed and verdict["verdict"] == "pass":
-                print(f"  ✅ 子任务 [{sid}] 完成。")
-                return "done", best
+            # 评审只在「门全过」时进行：门没过的轮次评审基本只会说"先修门"，是低价值开销——
+            # 此时下一轮指令由门报错驱动即可（见 build_next_instruction 的 gate_failed 分支）。
+            # --no-review 则连门过后的评审也省掉，门全过即视为完成（Codex+门 纯净模式）。
+            if passed:
+                if self.cfg.no_review:
+                    verdict = {"verdict": "pass", "findings": [],
+                               "comments": "(评审已禁用：门全过即通过)"}
+                    print("  Claude 评审：已跳过（--no-review，门全过即完成）")
+                else:
+                    self._begin("review", sid, rnd)
+                    verdict = self.reviewer.review(
+                        acceptance, diff, gates_detail(gate_results), label)
+                    print(f"  Claude 评审：{verdict['verdict']}"
+                          + (f"（{len(verdict['findings'])} 条意见）" if verdict["findings"] else ""))
+                if verdict["verdict"] == "pass":
+                    print(f"  ✅ 子任务 [{sid}] 完成。")
+                    return "done", best
+            else:
+                # 门未过：跳过评审，给 build_next_instruction 一个中性 verdict，让其走 gate_failed 分支
+                verdict = {"verdict": "revise", "findings": [], "comments": ""}
+                print("  Claude 评审：已跳过（门未过，先据门报错修复）")
 
             mode, instruction = build_next_instruction(
                 brief, diff, gate_results, verdict, self.git.enabled)

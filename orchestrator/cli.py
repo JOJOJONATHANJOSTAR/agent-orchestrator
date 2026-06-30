@@ -62,9 +62,16 @@ def main(argv: list[str] | None = None) -> None:
     print(f"运行 ID：{run_id}  | 仓库：{cfg.repo}  | git：{'是' if git.enabled else '否'} "
           f"| 日志：{run_dir}")
     print(f"验收门链：{' → '.join(n for n, _ in cfg.gates)}")
+    modes = []
+    if cfg.no_plan and not cfg.decompose:
+        modes.append("跳过规划")
+    if cfg.no_review:
+        modes.append("跳过评审（门过即完成）")
+    if modes:
+        print(f"轻量模式：{' + '.join(modes)}")
     artifacts.write("task.txt", args.task)
 
-    # ---- 规划：DAG 模式拆子任务；否则单任务退化为单节点 DAG ----
+    # ---- 规划：DAG 模式拆子任务；--no-plan 用需求原文直接当单任务；否则 Claude 规划成单节点 DAG ----
     ledger.begin("plan")
     if cfg.decompose:
         subtasks = topo_order(planner.decompose(args.task))
@@ -73,6 +80,12 @@ def main(argv: list[str] | None = None) -> None:
         for s in subtasks:
             dep = f" ⟵ {s['deps']}" if s["deps"] else ""
             print(f"    [{s['id']}] {s['title']}{dep}")
+    elif cfg.no_plan:
+        # 跳过 Claude 规划：需求原文当 brief，验收门名当验收标准（小/清晰任务省一次规划调用）
+        acceptance = [f"通过验收门：{n}" for n, _ in cfg.gates] or ["通过全部验收门"]
+        subtasks = [{"id": "main", "title": args.task[:30], "deps": [],
+                     "brief": args.task, "acceptance_criteria": acceptance}]
+        print("  已跳过规划：用需求原文当 brief、验收门当验收标准。")
     else:
         spec = planner.plan(args.task)
         artifacts.write("plan.json", json.dumps(spec, ensure_ascii=False, indent=2))

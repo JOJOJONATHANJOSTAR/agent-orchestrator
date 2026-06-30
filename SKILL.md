@@ -24,11 +24,17 @@ description: 【仅手动调用——不要自动触发】运行「Claude 规划
 
    | 档 | 适用 | 你装配成 |
    |---|---|---|
+   | 小改 / 极简 | 单文件/局部小改、需求已很清晰、且有可信验收门 | `--no-plan --no-review --max-rounds 2 --codex-config model_reasoning_effort=medium` |
    | 省着跑 | 小改动 / 验证想法 | `--budget-usd 1.5 --max-rounds 2 --codex-config model_reasoning_effort=medium` |
    | 标准（默认） | 一般功能 / 重构 | `--budget-usd 4 --max-rounds 3` |
    | 充足 | 大任务 / 要拆子任务 | `--budget-usd 10 --max-rounds 4`（通常配 `--decompose`） |
 
-   参考：wildlife 6 子任务重构实跑 ≈ $2.76。`--budget-seconds` 视情况另给。
+   参考：wildlife 6 子任务重构实跑 ≈ $2.76；单文件小游戏一轮 ≈ $0.37。`--budget-seconds` 视情况另给。
+   **编排重量随任务伸缩**：编排的固定开销是 Claude 规划 + 评审，小任务里占大头。「小改/极简」档用
+   `--no-plan`（跳过规划，需求原文当 brief、门当验收标准）+ `--no-review`（门全过即完成，Claude 完全
+   退出循环，纯 Codex+门），把小改成本压到最低——**前提是验收门可信**（门兜不住的运行时正确性就没人
+   兜了，所以仅在门足够客观时用）。需求模糊或要质量把关 → 别用 `--no-plan`/`--no-review`，走标准档。
+   注：**默认已是「门过才评审」**——门没过的轮次自动跳过评审（只在门全绿时评审做最终把关），无需配置。
 
 ### 步骤 2 · 推断目标仓库与 git 状态（→ `--repo`，不要问，先猜）
 从上下文推断（正在讨论的项目 / 当前目录），不明确才问，并确认绝对路径。
@@ -127,6 +133,8 @@ Python ≥ 3.10；`claude` 与 `codex` 已安装登录；目标最好是 git 仓
 | `--gate 名字=命令` | 验收门链一环，可重复；任一不过即未达标 |
 | `--max-rounds` | 每个子任务最多几轮（默认 3） |
 | `--decompose` | 拆成子任务 DAG，按拓扑序逐个做（失败只影响下游） |
+| `--no-plan` | 跳过 Claude 规划：需求原文当 brief、验收门当验收标准（小/清晰任务省一次规划调用；与 `--decompose` 互斥） |
+| `--no-review` | 跳过 Claude 评审：门全过即视为完成（Codex+门 纯净模式）。注：默认已是「门过才评审」，本项更进一步连最终评审也省 |
 | `--budget-usd` / `--budget-seconds` | 成本/耗时上限，超限提前停止 |
 | `--rollback-on-fail` | 失败时回滚工作区到最近一次门全过的快照 |
 | `--continue-on-fail` | 子任务失败时仍尝试其下游（仅告警，不整支跳过） |

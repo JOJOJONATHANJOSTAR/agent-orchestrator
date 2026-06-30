@@ -20,6 +20,8 @@ DEFAULTS = {
     "budget_seconds": 0,         # 累计耗时上限（秒）；0 = 不限
     "rollback_on_fail": False,   # 最终失败时是否把工作区回滚到最佳快照
     "continue_on_fail": False,   # 子任务失败时，是否仍尝试其下游（默认级联跳过）
+    "no_plan": False,            # 跳过 Claude 规划：需求原文当 brief、验收门当标准（小任务省开销）
+    "no_review": False,          # 跳过 Claude 评审：门全过即完成（Codex+门 纯净模式）
 }
 
 
@@ -43,6 +45,8 @@ class Config:
     continue_on_fail: bool
     decompose: bool
     dry_run: bool
+    no_plan: bool
+    no_review: bool
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -83,6 +87,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "适合下游与失败者无强耦合的情况，避免一个卡点拖垮全站收尾类任务")
     ap.add_argument("--decompose", action="store_true",
                     help="先把需求拆成子任务 DAG，按拓扑序逐个实现（失败只影响其下游）")
+    ap.add_argument("--no-plan", action="store_true",
+                    help="跳过 Claude 规划：用需求原文当 brief、验收门当验收标准（小/清晰任务省一次规划开销；"
+                         "与 --decompose 互斥，后者需要规划，同时给则忽略本项）")
+    ap.add_argument("--no-review", action="store_true",
+                    help="跳过 Claude 评审：验收门全过即视为完成（Codex+门 纯净模式，适合有可信验收门的小改）。"
+                         "注意：默认行为已是「门过才评审」，本项更进一步连最终评审也省掉")
     ap.add_argument("--dry-run", action="store_true",
                     help="用假 agent 走通流程（不真调模型，便于自测）")
     ap.add_argument("--auth-channel", choices=["auto", "subscription", "api"],
@@ -125,4 +135,5 @@ def config_from_args(args: argparse.Namespace) -> Config:
         budget_seconds=args.budget_seconds, rollback_on_fail=args.rollback_on_fail,
         continue_on_fail=args.continue_on_fail,
         decompose=args.decompose, dry_run=args.dry_run,
+        no_plan=args.no_plan, no_review=args.no_review,
     )

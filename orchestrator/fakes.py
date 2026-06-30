@@ -1,15 +1,24 @@
 """dry-run 用的确定性测试替身，实现与真实适配器相同的接口（LLM / Coder / Gates）。
 
-剧本：每个子任务第 1 次评审 revise、第 2 次 pass；验收门第 1 轮 tests 挂、之后全过，
-据此演示门链 + gate_failed/review_revise 分流 + 多轮流转，全程不调真模型。
+剧本（与「门过才评审」的新流程一致，收敛由 codex 实现次数驱动、按子任务重置）：
+每个子任务第 1 轮验收门 tests 挂（演示 gate_failed 重试，此时按新逻辑跳过评审）；第 2 轮 tests
+全过 → 触发评审 → pass → 完成。据此演示门链 + 门未过跳过评审 + 多轮流转，全程不调真模型。
 """
 from __future__ import annotations
 
 
 class _Brain:
-    """共享计数器，驱动 FakeClaude 与 FakeGates 的确定性剧本。"""
+    """共享状态：按子任务统计 codex 实现次数，驱动 FakeGates / FakeClaude 的确定性剧本。"""
     def __init__(self):
-        self.round = 0
+        self.cur_sid: str | None = None
+        self.round_in_sub = 0
+
+    def note_impl(self, label: str) -> None:
+        """codex 每次实现时调用。label 形如 ``s1_round2``；子任务切换时重置轮计数。"""
+        sid = label.rsplit("_round", 1)[0]
+        if sid != self.cur_sid:
+            self.cur_sid, self.round_in_sub = sid, 0
+        self.round_in_sub += 1
 
 
 class FakeClaude:
@@ -26,9 +35,8 @@ class FakeClaude:
         if "技术规划者" in system:           # 单任务规划器
             return ('随便加点解释。{"brief":"实现 add(a,b) 返回 a+b 并补单测",'
                     '"acceptance_criteria":["pytest 全绿","存在 add 函数"]}')
-        # reviewer：每个子任务第 2 次评审才通过
-        self.brain.round += 1
-        if self.brain.round % 2 == 0:
+        # reviewer：新流程下只在门全过时才被调用（round_in_sub≥2），此时直接 pass 完成
+        if self.brain.round_in_sub >= 2:
             return '```json\n{"verdict":"pass","findings":[],"comments":""}\n```'
         return ('{"verdict":"revise","findings":[{"file":"calc.py","where":"add",'
                 '"issue":"add 还没实现","fix":"新增 def add(a,b): return a+b"}],'
@@ -36,7 +44,11 @@ class FakeClaude:
 
 
 class FakeCodex:
+    def __init__(self, brain: _Brain):
+        self.brain = brain
+
     def implement(self, prompt: str, label: str) -> None:
+        self.brain.note_impl(label)
         print(f"  [dry-run] 假装 Codex 在做：{prompt[:40]}…")
 
 
@@ -45,7 +57,7 @@ class FakeGates:
         self.brain = brain
 
     def run(self) -> tuple[bool, list[dict]]:
-        tests_ok = self.brain.round >= 1
+        tests_ok = self.brain.round_in_sub >= 2   # 每子任务第 1 轮挂、第 2 轮起过
         return tests_ok, [
             {"name": "lint", "cmd": "ruff check .", "passed": True, "log": "dry-run: lint 通过"},
             {"name": "tests", "cmd": "pytest -q", "passed": tests_ok,
@@ -55,4 +67,4 @@ class FakeGates:
 
 def make_fakes() -> tuple[FakeClaude, FakeCodex, FakeGates]:
     brain = _Brain()
-    return FakeClaude(brain), FakeCodex(), FakeGates(brain)
+    return FakeClaude(brain), FakeCodex(brain), FakeGates(brain)

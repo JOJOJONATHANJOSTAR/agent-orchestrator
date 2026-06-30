@@ -9,10 +9,15 @@ the script in the middle passes structured messages, runs acceptance gates, cont
 and guards against infinite cycles.
 
 ```
-requirement ──▶ Claude plans ──▶ ┌──────────── loop (≤ max-rounds) ────────────┐
-                                 │ Codex edits ──▶ gates(tests/lint) ──▶ review │
-                                 └──── passed & review pass ? ─yes─▶ done / no─▶ next ─┘
+requirement ──▶ Claude plans ──▶ ┌─────────────── loop (≤ max-rounds) ───────────────┐
+                                 │ Codex edits ──▶ gates(tests/lint) ──▶ review-if-green │
+                                 └──── all gates pass & review pass ? ─yes─▶ done / no─▶ next ─┘
 ```
+
+> **Review only when gates pass (default)**: rounds where gates fail skip Claude review (the next
+> round is driven by gate errors); review runs only when gates are green, as a final check — this
+> drops the low-value review on failing rounds. Go lighter on small tasks with `--no-review`
+> (gates-pass = done, Claude leaves the loop) / `--no-plan` (skip planning); see the param table.
 
 ## Roles
 
@@ -129,6 +134,8 @@ skeleton** — plan → multi-round implement → review → done — without ca
 | `--rollback-on-fail` | off | On final failure, roll the working tree back to the last gate-passing snapshot (otherwise the start) |
 | `--continue-on-fail` | off | When a subtask fails, still attempt its downstream (warn only, don't skip the whole branch) |
 | `--decompose` | off | First break the requirement into a subtask DAG, implement in topological order (failure only affects downstream) |
+| `--no-plan` | off | Skip Claude planning: use the raw requirement as the brief and the gates as acceptance criteria (saves a call on small/clear tasks; mutually exclusive with `--decompose`) |
+| `--no-review` | off | Skip Claude review: passing all gates counts as done (Codex+gate-only mode). Note: the default is already "review only when gates pass" |
 | `--dry-run` | off | Run the flow with fake agents, no real model calls |
 
 ## Artifacts and recoverability
