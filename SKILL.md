@@ -93,6 +93,29 @@ python "<本skill>/scripts/run.py" "<任务原文>" \
 Python ≥ 3.10；`claude` 与 `codex` 已安装登录；目标最好是 git 仓库（否则无每轮快照/回滚）。
 没装 codex 或只想验证装配时，用 `--dry-run`（注入假 agent，不调真模型）。
 
+**托管子会话下的鉴权（重要）**：当本 skill 在 Claude Code 托管子会话里运行时，宿主登录态是运行时
+注入、不落地为 CLI 可读凭据，子进程 `claude -p` 会报 `Not logged in`。入口已会**自动**处理——
+据 `--auth-channel` 选定一条独立鉴权通道，注入其凭据并剥离宿主会话变量。支持两条通道，凭据均来自
+环境变量或一次性配置文件 `~/.claude_codex_orchestrator.env`：
+
+| 通道 | 凭据（配置文件键） | 计费 | 如何获得 |
+|------|------|------|------|
+| `subscription` | `CLAUDE_CODE_OAUTH_TOKEN=...` | 吃**订阅额度** | 普通终端跑 `claude setup-token`，复制其输出 |
+| `api` | `ANTHROPIC_API_KEY=sk-ant-...` | 按 **API** 计费 | Anthropic 控制台签发 |
+
+`--auth-channel` 取值 `subscription` / `api` / `auto`（默认）。`auto` = 按 `CCO_DEFAULT_CHANNEL` →
+唯一可用 → 二者皆有时**优先订阅**。显式指定的通道缺凭据时会 fail-fast 报清楚（不会静默漏到宿主网关）。
+
+**你（助手）该怎么驱动它（贴合 skill 直觉：默认订阅，不每次打扰）：**
+- **首次/未配置**：检测到配置文件不存在或为空 → 引导用户一次性配置。问"用订阅额度还是 API key（可都配）"；
+  选订阅 → 让其在普通终端跑 `claude setup-token` 并回贴 token，你写入配置文件
+  `CLAUDE_CODE_OAUTH_TOKEN=...`；选 API → 写 `ANTHROPIC_API_KEY=...`。可顺手写 `CCO_DEFAULT_CHANNEL=...`
+  定默认，并提示锁文件权限（`icacls`）。**订阅通道绕不开 `setup-token` 这一步**（宿主订阅态不落地）。
+- **两条都配好后**：平时静默走默认（不每次问）。**只在"该选"时主动浮出选项**——大任务 / `--decompose`
+  多轮时提示"可能撞订阅限额，建议本次 `--auth-channel api`"；小改默认订阅即可。用户一句"这次用 key /
+  用订阅"就装配对应 `--auth-channel` 覆盖单次。
+- **只配了一条**：直接用，不问。
+
 ## 参数参考（仅当需要覆盖默认时）
 
 | 参数 | 作用 |
@@ -106,6 +129,7 @@ Python ≥ 3.10；`claude` 与 `codex` 已安装登录；目标最好是 git 仓
 | `--continue-on-fail` | 子任务失败时仍尝试其下游（仅告警，不整支跳过） |
 | `--codex-model` / `--codex-config k=v` | 控制 **codex** 的模型 / 配置（如降推理强度提速） |
 | `--model` | 控制 **claude** 的模型（不是 codex） |
+| `--auth-channel {auto,subscription,api}` | 托管子会话下 claude 的鉴权通道：订阅额度 / API 计费 / 自动（默认）。详见「托管子会话下的鉴权」 |
 | `--dry-run` | 不调真模型走通流程，用于自测 |
 
 ## 安全

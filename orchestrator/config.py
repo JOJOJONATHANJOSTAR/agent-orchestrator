@@ -85,6 +85,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="先把需求拆成子任务 DAG，按拓扑序逐个实现（失败只影响其下游）")
     ap.add_argument("--dry-run", action="store_true",
                     help="用假 agent 走通流程（不真调模型，便于自测）")
+    ap.add_argument("--auth-channel", choices=["auto", "subscription", "api"],
+                    default="auto",
+                    help="托管子会话下 headless claude 的鉴权通道："
+                         "subscription=订阅额度(CLAUDE_CODE_OAUTH_TOKEN)、api=API计费(ANTHROPIC_API_KEY)、"
+                         "auto=按 CCO_DEFAULT_CHANNEL/唯一可用/二者皆有时优先订阅（默认）")
     return ap
 
 

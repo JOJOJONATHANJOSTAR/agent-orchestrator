@@ -10,10 +10,139 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Protocol
 
 from .process import run
 from .util import extract_json
+
+# 宿主托管会话注入的、会让 headless claude 误用宿主路由/登录态的变量
+_HOST_PREFIX = "CLAUDE_CODE_"
+_HOST_EXACT = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN")
+# 一次性配置凭据的默认文件（可用 CCO_AUTH_FILE 覆盖路径）
+_AUTH_FILE = "~/.claude_codex_orchestrator.env"
+
+# 两条鉴权通道各自的凭据环境变量名
+_API_KEY_VAR = "ANTHROPIC_API_KEY"            # api 通道：按 API 计费
+_OAUTH_VAR = "CLAUDE_CODE_OAUTH_TOKEN"        # subscription 通道：吃订阅额度（claude setup-token 产物）
+_DEFAULT_CHANNEL_VAR = "CCO_DEFAULT_CHANNEL"  # auto 时的默认通道偏好（subscription / api）
+
+# channel 名 -> (凭据环境变量名, 人类可读名)
+_CHANNELS: dict[str, tuple[str, str]] = {
+    "subscription": (_OAUTH_VAR, "订阅额度（CLAUDE_CODE_OAUTH_TOKEN）"),
+    "api": (_API_KEY_VAR, "API key（ANTHROPIC_API_KEY）"),
+}
+
+
+def _read_config_file() -> dict[str, str]:
+    """读取一次性配置文件里的所有 `KEY=VALUE`（忽略空行/#注释，去引号）。读不到返回 {}。"""
+    raw = os.environ.get("CCO_AUTH_FILE")
+    path = Path(raw).expanduser() if raw else Path(_AUTH_FILE).expanduser()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        v = v.strip().strip('"').strip("'")
+        if k.strip() and v:
+            out[k.strip()] = v
+    return out
+
+
+def _available_channels(cfg: dict[str, str]) -> dict[str, str]:
+    """返回当前可用的「通道 -> 凭据值」：每条通道的凭据取「环境变量优先，其次配置文件」。"""
+    out: dict[str, str] = {}
+    for ch, (var, _name) in _CHANNELS.items():
+        val = os.environ.get(var) or cfg.get(var)
+        if val:
+            out[ch] = val
+    return out
+
+
+def _pick_channel(channel: str, available: dict[str, str], cfg: dict[str, str]) -> str | None:
+    """据请求的 channel 与可用通道决定最终通道。
+
+    - 显式指定 subscription/api：可用则用之；不可用则 fail-fast（不静默回落）。
+    - auto：按 CCO_DEFAULT_CHANNEL → 唯一可用 → 二者皆有时优先订阅；都没配则返回 None。
+    """
+    if channel in _CHANNELS:
+        if channel in available:
+            return channel
+        _fail_channel_unavailable(channel)
+    if not available:
+        return None
+    pref = (cfg.get(_DEFAULT_CHANNEL_VAR) or os.environ.get(_DEFAULT_CHANNEL_VAR) or "").strip()
+    if pref in available:
+        return pref
+    if len(available) == 1:
+        return next(iter(available))
+    return "subscription"  # 两条都可用、无明确默认：优先订阅，贴合 skill 直觉
+
+
+def _fail_channel_unavailable(channel: str) -> None:
+    """显式请求的通道缺凭据时，清晰报错并退出（避免漏到宿主网关再撞含糊的 'Not logged in'）。"""
+    var = _CHANNELS[channel][0]
+    if channel == "subscription":
+        how = (f"在普通终端跑 `claude setup-token`，把输出的 token 写入 {_AUTH_FILE}："
+               f"{_OAUTH_VAR}=...")
+        other = "api"
+    else:
+        how = (f"写入 {_AUTH_FILE}：{_API_KEY_VAR}=sk-ant-...（或 setx 同名环境变量）")
+        other = "subscription"
+    sys.exit(
+        f"[auth] 指定的鉴权通道 '{channel}' 不可用：未找到 {var}。\n"
+        f"  配置方法：{how}\n"
+        f"  或改用另一条通道：--auth-channel {other}（若已配置）。"
+    )
+
+
+def prepare_agent_auth(channel: str = "auto") -> None:
+    """托管子会话里为子进程配置独立鉴权，支持「订阅额度 / API key」两条通道、每次可选。
+
+    托管会话（存在 `CLAUDE_CODE_*`）中，宿主登录 token 运行时注入、不落地为 CLI 可读凭据，
+    于是子进程 `claude -p` 报 'Not logged in'。这里据 channel 选定一条通道的凭据：
+      - ``subscription``：用 ``CLAUDE_CODE_OAUTH_TOKEN``（`claude setup-token` 产物），走订阅额度；
+      - ``api``：用 ``ANTHROPIC_API_KEY``，按 API 计费；
+      - ``auto``：按 ``CCO_DEFAULT_CHANNEL`` → 唯一可用 → 二者皆有时优先订阅。
+    凭据可来自环境变量或一次性配置文件 ``~/.claude_codex_orchestrator.env``。
+
+    选定后**先剥离**宿主会话变量（`CLAUDE_CODE_*` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`），
+    **再注入**该通道凭据——注入必须在剥离之后，否则同样以 ``CLAUDE_CODE_`` 开头的 OAuth token
+    会被剥离循环一并删掉。两套凭据互斥注入，避免 claude 选错。
+
+    显式指定的通道不可用时 fail-fast（见 `_fail_channel_unavailable`）。非托管会话、或 auto 下
+    什么都没配时为 no-op（后者交由后续失败时的 `_auth_hint` 指引）。只改本进程的 os.environ
+    （子进程继承），不影响宿主。
+
+    Args:
+        channel (str): ``auto`` | ``subscription`` | ``api``。
+
+    Returns:
+        None
+    """
+    if not any(k.startswith(_HOST_PREFIX) for k in os.environ):
+        return
+    cfg = _read_config_file()
+    available = _available_channels(cfg)
+    chosen = _pick_channel(channel, available, cfg)
+    if chosen is None:
+        return  # auto 且未配置任何通道：优雅 no-op，交由 _auth_hint 指引
+
+    var, name = _CHANNELS[chosen]
+    value = available[chosen]
+    # 顺序关键：先剥离宿主注入，再注入凭据（OAuth token 也以 CLAUDE_CODE_ 开头，否则会被一并删除）
+    for k in [k for k in os.environ if k.startswith(_HOST_PREFIX)]:
+        del os.environ[k]
+    for k in _HOST_EXACT:
+        os.environ.pop(k, None)
+    os.environ.pop(_OAUTH_VAR if var == _API_KEY_VAR else _API_KEY_VAR, None)  # 互斥：清掉另一通道凭据
+    os.environ[var] = value
+    print(f"  ℹ 检测到托管子会话：已用「{name}」为子进程配置鉴权。")
 
 
 def _auth_hint() -> str:
@@ -21,18 +150,22 @@ def _auth_hint() -> str:
 
     托管子会话（Claude Code 内部启动的子进程）里，token 是运行时注入的，不以独立 CLI
     可读的凭据形式存在，于是裸跑 `claude -p` 会撞 'Not logged in'。检测到这种环境就提示
-    用 API key 旁路。
+    如何一次性配置两条通道之一（之后由 prepare_agent_auth 自动生效）。
 
     Returns:
         str: 多行修复建议文本；据环境是否含 CLAUDE_CODE_* 给出托管/普通两种引导。
     """
-    managed = any(k.startswith("CLAUDE_CODE_") for k in os.environ)
+    managed = any(k.startswith(_HOST_PREFIX) for k in os.environ)
     lines = ["", "  ↳ 修复建议："]
     if managed:
         lines += [
-            "    检测到托管子会话（CLAUDE_CODE_* 环境变量）：headless claude 无法复用宿主登录态。",
-            "    请改用 API key 旁路——设置 ANTHROPIC_API_KEY，并在启动子进程前剥离 "
-            "CLAUDE_CODE_* 与 ANTHROPIC_BASE_URL。",
+            "    检测到托管子会话：headless claude 无法复用宿主登录态，需配置一条独立鉴权通道。",
+            f"    一次性写入 {_AUTH_FILE} 即可（之后每次自动生效）：",
+            "      • 订阅额度（不走 API 计费）：先 `claude setup-token`，再写 "
+            f"{_OAUTH_VAR}=...",
+            f"      • API 计费：写 {_API_KEY_VAR}=sk-ant-...",
+            f"    两条都配后，可用 --auth-channel subscription|api 每次任选，或用 "
+            f"{_DEFAULT_CHANNEL_VAR}=... 设默认。",
         ]
     else:
         lines += ["    请在终端先执行 `claude /login` 完成登录，或设置 ANTHROPIC_API_KEY。"]

@@ -55,6 +55,19 @@ orchestrator/
 - A clean working tree is preferred, so `git diff` cleanly shows each round's changes
 - An acceptance-gate command configured (default `pytest -q`)
 
+> **Auth inside a hosted child session**: when run inside a Claude Code hosted child session, the
+> host's login isn't persisted as CLI-readable credentials, so the `claude -p` subprocess hits
+> `Not logged in`. The entry point handles this automatically: it picks one channel per
+> `--auth-channel`, injects that credential, and strips the host session vars (`CLAUDE_CODE_*` /
+> `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`). Two channels, with credentials from env vars or a
+> config file `~/.claude_codex_orchestrator.env`:
+> - `subscription` (uses your plan): `CLAUDE_CODE_OAUTH_TOKEN=...` (get it via `claude setup-token`)
+> - `api` (metered API): `ANTHROPIC_API_KEY=sk-ant-...`
+>
+> `--auth-channel` takes `auto` (default — `CCO_DEFAULT_CHANNEL` / the only one configured /
+> subscription when both exist), `subscription`, or `api`; an explicitly requested channel with no
+> credential fails fast. Configure once. The config file holds a secret, so keep it out of version control.
+
 ## Usage
 
 ```bash

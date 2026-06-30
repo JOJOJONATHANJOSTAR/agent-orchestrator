@@ -52,6 +52,16 @@ orchestrator/
 - 工作区最好是干净的，方便用 `git diff` 看本轮改动
 - 配好验收门命令（默认 `pytest -q`）
 
+> **托管子会话下的鉴权**：在 Claude Code 托管子会话里跑时，宿主登录态不落地为 CLI 可读凭据，
+> 子进程 `claude -p` 会 `Not logged in`。入口会自动处理：据 `--auth-channel` 选一条独立通道，
+> 注入凭据并剥离宿主会话变量（`CLAUDE_CODE_*` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`）。
+> 两条通道，凭据来自环境变量或配置文件 `~/.claude_codex_orchestrator.env`：
+> - `subscription`（订阅额度）：`CLAUDE_CODE_OAUTH_TOKEN=...`（普通终端 `claude setup-token` 获取）
+> - `api`（API 计费）：`ANTHROPIC_API_KEY=sk-ant-...`
+>
+> `--auth-channel` 取 `auto`（默认，按 `CCO_DEFAULT_CHANNEL`/唯一可用/二者皆有时优先订阅）/
+> `subscription` / `api`；显式通道缺凭据时 fail-fast。一次性配置即可；该配置文件含密钥，请勿入库。
+
 ## 用法
 
 ```bash
