@@ -136,6 +136,12 @@ skeleton** — plan → multi-round implement → review → done — without ca
 - **Per-round logs** are written to `runs/<timestamp>/`: the task, plan JSON, and each round's
   instruction / Codex stdout·stderr / diff / gate output / review reply (including every raw
   reply from JSON retries). This is the first place to look when debugging.
+- **Usage / performance report**: on finish, a compact summary table is printed to the terminal
+  (cost / tokens / per-phase time share); structured metrics are written to
+  `runs/<timestamp>/metrics.json` and a self-contained chart report to `report.html` (zero
+  dependencies, opens offline / shareable — 4 charts: tokens per round, time by phase, tokens by
+  agent, gate pass grid). Cost is claude-only (codex uses subscription quota, reports no USD);
+  codex tokens are best-effort parsed.
 - **Per-round snapshots** (git repos only): `git stash create` produces a detached commit,
   tagged `orch/<run-id>/round<N>_after`, **without touching the working tree**. Any round can be
   restored:

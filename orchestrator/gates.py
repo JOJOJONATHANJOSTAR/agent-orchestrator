@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 
 from .process import run
 
@@ -9,8 +10,9 @@ from .process import run
 class GateRunner:
     """按配置依次跑验收门链。实现 engine 依赖的 Gates 接口（run）。"""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, ledger=None):
         self.cfg = cfg
+        self.ledger = ledger
 
     def run(self) -> tuple[bool, list[dict]]:
         """依次执行配置的每个验收门命令。超时按未通过处理。
@@ -21,6 +23,7 @@ class GateRunner:
         """
         results = []
         for name, cmd in self.cfg.gates:
+            t0 = time.perf_counter()
             try:
                 r = run(cmd, cwd=self.cfg.repo, shell=True,
                         timeout=self.cfg.gate_timeout, clean=True)
@@ -28,6 +31,10 @@ class GateRunner:
                 log = (r.stdout + r.stderr)[-2000:]
             except subprocess.TimeoutExpired:
                 passed, log = False, f"超时（>{self.cfg.gate_timeout}s）"
+            if self.ledger is not None:
+                # 门链无 token/成本，只记耗时与通过与否（喂「耗时按阶段」与「门链网格」）
+                self.ledger.record("gate", duration_s=time.perf_counter() - t0,
+                                   label=name, ok=passed)
             results.append({"name": name, "cmd": cmd, "passed": passed, "log": log})
         return all(r["passed"] for r in results), results
 

@@ -22,7 +22,7 @@ class SubtaskRunner:
         reviewer (Reviewer): 评审者。
     """
 
-    def __init__(self, cfg, budget, artifacts, git, coder, gates, reviewer):
+    def __init__(self, cfg, budget, artifacts, git, coder, gates, reviewer, ledger=None):
         self.cfg = cfg
         self.budget = budget
         self.artifacts = artifacts
@@ -30,6 +30,12 @@ class SubtaskRunner:
         self.coder = coder
         self.gates = gates
         self.reviewer = reviewer
+        self.ledger = ledger
+
+    def _begin(self, phase: str, sid: str, rnd: int) -> None:
+        """给 ledger 设置当轮阶段上下文（dry-run 下 ledger 为 None，no-op）。"""
+        if self.ledger is not None:
+            self.ledger.begin(phase, sid, rnd)
 
     def run(self, subtask: dict, context: str) -> tuple[str, str | None]:
         """对单个子任务跑「实现→门链→评审」多轮循环，直到通过或耗尽轮数/预算。
@@ -60,6 +66,7 @@ class SubtaskRunner:
 
             print("▶ Codex 实现中…")
             self.artifacts.write(f"{label}_instruction.txt", instruction)
+            self._begin("impl", sid, rnd)
             self.coder.implement(instruction, label)
 
             diff = self.git.diff()
@@ -67,6 +74,7 @@ class SubtaskRunner:
             if not diff.strip() and self.git.enabled:
                 print("  ⚠ 本轮没有产生任何代码改动（空 diff）。")
 
+            self._begin("gate", sid, rnd)
             passed, gate_results = self.gates.run()
             self.artifacts.write(f"{label}_gates.json",
                                  json.dumps(gate_results, ensure_ascii=False, indent=2))
@@ -81,6 +89,7 @@ class SubtaskRunner:
 
             print(f"  💳 累计成本 ${self.budget.usd:.4f} | 耗时 {self.budget.elapsed():.0f}s")
 
+            self._begin("review", sid, rnd)
             verdict = self.reviewer.review(acceptance, diff, gates_detail(gate_results), label)
             print(f"  Claude 评审：{verdict['verdict']}"
                   + (f"（{len(verdict['findings'])} 条意见）" if verdict["findings"] else ""))

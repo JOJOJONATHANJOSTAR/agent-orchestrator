@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Protocol
 
+from .metrics import parse_codex_tokens
 from .process import run
 from .util import extract_json
 
@@ -196,11 +198,12 @@ class Coder(Protocol):
 
 
 class ClaudeClient:
-    """headless 调 Claude，只读工具，累计成本到 budget。"""
+    """headless 调 Claude，只读工具，累计成本到 budget，并把 token/成本/耗时记入 ledger。"""
 
-    def __init__(self, cfg, budget):
+    def __init__(self, cfg, budget, ledger=None):
         self.cfg = cfg
         self.budget = budget
+        self.ledger = ledger
 
     def ask_text(self, prompt: str, system: str) -> str:
         """headless 调用 Claude 并累计成本。
@@ -225,8 +228,10 @@ class ClaudeClient:
         ]
         if self.cfg.model:
             cmd += ["--model", self.cfg.model]
+        t0 = time.perf_counter()
         r = run(cmd, cwd=self.cfg.repo, timeout=self.cfg.claude_timeout,
                 input=prompt.encode("utf-8"))
+        dt = time.perf_counter() - t0
         if r.returncode != 0:
             # claude 的实际错误（如无效模型 / API 报错）常在 stdout 的 JSON 里，stderr 可能为空
             detail = (r.stderr.strip() or r.stdout.strip())[:400] or "(无输出)"
@@ -238,15 +243,26 @@ class ClaudeClient:
             hint = _auth_hint() if "not logged in" in detail.lower() else ""
             sys.exit(f"[claude] 调用失败: {detail}{hint}")
         self.budget.add(data.get("total_cost_usd"))
+        if self.ledger is not None:
+            u = data.get("usage") or {}
+            self.ledger.record(
+                "claude", model=str(data.get("model") or self.cfg.model or ""),
+                input_tokens=int(u.get("input_tokens") or 0),
+                output_tokens=int(u.get("output_tokens") or 0),
+                cache_read=int(u.get("cache_read_input_tokens") or 0),
+                cache_create=int(u.get("cache_creation_input_tokens") or 0),
+                cost_usd=float(data.get("total_cost_usd") or 0.0),
+                duration_s=dt)
         return data["result"]
 
 
 class CodexClient:
     """headless 调 Codex 实现代码。--full-access 跳过逐步确认（请确认在受控环境运行）。"""
 
-    def __init__(self, cfg, artifacts):
+    def __init__(self, cfg, artifacts, ledger=None):
         self.cfg = cfg
         self.artifacts = artifacts
+        self.ledger = ledger
 
     def implement(self, prompt: str, label: str) -> None:
         """headless 调用 Codex 实现代码，stdout/stderr 落盘到 artifacts。
@@ -280,9 +296,19 @@ class CodexClient:
         for kv in self.cfg.codex_config:          # 如 model_reasoning_effort=medium
             cmd += ["-c", kv]
         # clean=True 剥离 codex 输出里的 ANSI 控制序列，让落盘日志干净
+        t0 = time.perf_counter()
         r = run(cmd, cwd=self.cfg.repo, timeout=self.cfg.codex_timeout, clean=True)
+        dt = time.perf_counter() - t0
         self.artifacts.write(f"{label}_codex_stdout.txt", r.stdout)
         self.artifacts.write(f"{label}_codex_stderr.txt", r.stderr)
+        if self.ledger is not None:
+            # codex 不报 USD 成本（吃订阅额度）；token 从 stdout best-effort 解析，抓不到记 0
+            tk = parse_codex_tokens(r.stdout)
+            inp, out = tk["input"], tk["output"]
+            if not inp and not out and tk["total"]:
+                inp = tk["total"]  # 只拿到合计、无输入/输出拆分：整体计入输入层，至少不丢失
+            self.ledger.record("codex", model=str(self.cfg.codex_model or ""),
+                               input_tokens=inp, output_tokens=out, duration_s=dt)
         if r.returncode != 0:
             sys.exit(f"[codex] 调用失败: {r.stderr.strip()}")
         tail = r.stdout.strip().splitlines()[-8:]

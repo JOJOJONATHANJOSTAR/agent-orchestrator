@@ -14,7 +14,9 @@ from .fakes import make_fakes
 from .gates import GateRunner
 from .gitrepo import GitRepo
 from .graph import topo_order
+from .metrics import MetricsLedger
 from .planner import Planner, Reviewer
+from .report import render_html, terminal_summary
 from .util import setup_console
 
 
@@ -36,6 +38,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # ---- 基础设施 ----
     budget = Budget(cfg.budget_usd, cfg.budget_seconds)  # 预算账本：累计成本与耗时，提供门控判定
+    ledger = MetricsLedger()                             # 度量账本：每次调用的 token/成本/耗时，供收尾报告
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")    # 用于日志目录和 git 标签
     run_dir = Path(cfg.repo) / "runs" / run_id           # 日志目录：每轮产物写到 runs/<时间戳>/
     artifacts = ArtifactLog(run_dir)                     # 日志落盘：把每轮产物写到 runs/<时间戳>/。
@@ -45,15 +48,15 @@ def main(argv: list[str] | None = None) -> None:
     if cfg.dry_run:
         llm, coder, gates = make_fakes()
     else:
-        llm = ClaudeClient(cfg, budget)
-        coder = CodexClient(cfg, artifacts)
-        gates = GateRunner(cfg)
+        llm = ClaudeClient(cfg, budget, ledger)
+        coder = CodexClient(cfg, artifacts, ledger)
+        gates = GateRunner(cfg, ledger)
 
     # ---- 领域 + 编排（依赖注入装配）----
     agent = JsonAgent(llm, artifacts, cfg.json_retries)
     planner = Planner(agent)
     reviewer = Reviewer(agent)
-    runner = SubtaskRunner(cfg, budget, artifacts, git, coder, gates, reviewer)
+    runner = SubtaskRunner(cfg, budget, artifacts, git, coder, gates, reviewer, ledger)
     engine = DagEngine(cfg, git, runner)
 
     print(f"运行 ID：{run_id}  | 仓库：{cfg.repo}  | git：{'是' if git.enabled else '否'} "
@@ -62,6 +65,7 @@ def main(argv: list[str] | None = None) -> None:
     artifacts.write("task.txt", args.task)
 
     # ---- 规划：DAG 模式拆子任务；否则单任务退化为单节点 DAG ----
+    ledger.begin("plan")
     if cfg.decompose:
         subtasks = topo_order(planner.decompose(args.task))
         artifacts.write("dag.json", json.dumps(subtasks, ensure_ascii=False, indent=2))
@@ -78,6 +82,14 @@ def main(argv: list[str] | None = None) -> None:
 
     # ---- 执行 ----
     res = engine.run(subtasks)
+
+    # ---- 报告：度量落盘 + 自包含 HTML + 终端汇总 ----
+    status = "全部完成" if res.all_done else ("预算用尽" if res.stopped_budget else "部分未完成")
+    artifacts.write("metrics.json", ledger.to_json())
+    artifacts.write("report.html", render_html(
+        ledger, {"run_id": run_id, "repo": str(cfg.repo), "task": args.task, "status": status}))
+    print("\n" + terminal_summary(ledger))
+    print(f"  📊 图表报告：{run_dir / 'report.html'}")
 
     # ---- 收尾 ----
     print("\n===== 总结 =====")

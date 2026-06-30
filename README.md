@@ -128,6 +128,10 @@ python claude_codex_orchestrator.py "随便写点啥" --dry-run
 
 - **每轮日志**落盘到 `runs/<时间戳>/`：任务、规划 JSON、每轮的指令 / Codex stdout·stderr /
   diff / 验收门输出 / 评审回复（含 JSON 重试的每次原始回复）。排查问题时直接看这里。
+- **用量 / 性能报告**：跑完终端打一张精简汇总表（成本 / token / 阶段耗时占比），并把
+  结构化度量写到 `runs/<时间戳>/metrics.json`、自包含图表报告写到 `report.html`（零依赖、
+  可离线打开 / 分享，含每轮 token、耗时按阶段、token 按 agent、各轮门链通过 4 张图）。
+  成本仅 claude 上报（codex 吃订阅额度不报美元）；codex token 为 best-effort 解析。
 - **每轮快照**（仅 git 仓库内）：用 `git stash create` 生成游离 commit 并打标签
   `orch/<run-id>/round<N>_after`，**不影响工作区**。任意一轮都可恢复：
   ```bash
