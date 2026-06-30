@@ -137,6 +137,7 @@ skeleton** — plan → multi-round implement → review → done — without ca
 | `--no-plan` | off | Skip Claude planning: use the raw requirement as the brief and the gates as acceptance criteria (saves a call on small/clear tasks; mutually exclusive with `--decompose`) |
 | `--no-review` | off | Skip Claude review: passing all gates counts as done (Codex+gate-only mode). Note: the default is already "review only when gates pass" |
 | `--dry-run` | off | Run the flow with fake agents, no real model calls |
+| `--check-auth` | off | Auth preflight: masked report of which channel will be used, where the credential comes from, and whether it's configured; no real run, no task needed |
 
 ## Artifacts and recoverability
 

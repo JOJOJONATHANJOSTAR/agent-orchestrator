@@ -129,6 +129,7 @@ python claude_codex_orchestrator.py "随便写点啥" --dry-run
 | `--no-plan` | 关 | 跳过 Claude 规划：需求原文当 brief、验收门当验收标准（小/清晰任务省开销；与 `--decompose` 互斥） |
 | `--no-review` | 关 | 跳过 Claude 评审：门全过即视为完成（Codex+门 纯净模式）。注：默认已是「门过才评审」 |
 | `--dry-run` | 关 | 用假 agent 走通流程，不真调模型 |
+| `--check-auth` | 关 | 鉴权预检：脱敏报告会用哪条通道、凭据从哪来、有没有配；不真跑、不需 task |
 
 ## 产物与可恢复性
 

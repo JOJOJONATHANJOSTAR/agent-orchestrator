@@ -56,7 +56,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         argparse.ArgumentParser: 已注册全部参数的解析器。
     """
     ap = argparse.ArgumentParser(description="Claude 规划 + Codex 实现 的编排器")
-    ap.add_argument("task", help="要交给这套框架完成的需求")
+    ap.add_argument("task", nargs="?", help="要交给这套框架完成的需求（--check-auth 时可省略）")
     ap.add_argument("--repo", default=DEFAULTS["repo"], help="目标仓库路径")
     ap.add_argument("--test-cmd", default=DEFAULTS["test_cmd"],
                     help="单个验收门命令（未用 --gate 时生效）")
@@ -95,6 +95,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "注意：默认行为已是「门过才评审」，本项更进一步连最终评审也省掉")
     ap.add_argument("--dry-run", action="store_true",
                     help="用假 agent 走通流程（不真调模型，便于自测）")
+    ap.add_argument("--check-auth", action="store_true",
+                    help="只做鉴权预检：报告会用哪条通道、凭据从哪来（脱敏），不真跑、不需 task")
     ap.add_argument("--auth-channel", choices=["auto", "subscription", "api"],
                     default="auto",
                     help="托管子会话下 headless claude 的鉴权通道："

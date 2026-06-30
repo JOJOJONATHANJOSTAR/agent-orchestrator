@@ -116,7 +116,11 @@ Python ≥ 3.10；`claude` 与 `codex` 已安装登录；目标最好是 git 仓
 唯一可用 → 二者皆有时**优先订阅**。显式指定的通道缺凭据时会 fail-fast 报清楚（不会静默漏到宿主网关）。
 
 **你（助手）该怎么驱动它（贴合 skill 直觉：默认订阅，不每次打扰）：**
-- **首次/未配置**：检测到配置文件不存在或为空 → 引导用户一次性配置。问"用订阅额度还是 API key（可都配）"；
+- **判断是否已配置：先跑 `python <本skill>/scripts/run.py --check-auth`**（脱敏、不真跑、不需 task），
+  它复用真实解析逻辑直接告诉你"会用哪条通道、凭据从哪来、有没有配"。**别再手搓 grep 配置文件或看进程
+  环境变量来判断**——凭据是放配置文件里、由入口运行时直接读，**本就不进 shell 环境**，看环境变量为空会
+  误判成"没配置"（曾因此白让用户重跑 `setup-token`）。
+- **首次/未配置**（`--check-auth` 报未配置时）：引导用户一次性配置。问"用订阅额度还是 API key（可都配）"；
   选订阅 → 让其在普通终端跑 `claude setup-token` 并回贴 token，你写入配置文件
   `CLAUDE_CODE_OAUTH_TOKEN=...`；选 API → 写 `ANTHROPIC_API_KEY=...`。可顺手写 `CCO_DEFAULT_CHANNEL=...`
   定默认，并提示锁文件权限（`icacls`）。**订阅通道绕不开 `setup-token` 这一步**（宿主订阅态不落地）。
@@ -141,6 +145,7 @@ Python ≥ 3.10；`claude` 与 `codex` 已安装登录；目标最好是 git 仓
 | `--codex-model` / `--codex-config k=v` | 控制 **codex** 的模型 / 配置（如降推理强度提速） |
 | `--model` | 控制 **claude** 的模型（不是 codex） |
 | `--auth-channel {auto,subscription,api}` | 托管子会话下 claude 的鉴权通道：订阅额度 / API 计费 / 自动（默认）。详见「托管子会话下的鉴权」 |
+| `--check-auth` | 鉴权预检：脱敏报告会用哪条通道、凭据从哪来、有没有配；不真跑、不需 task。启动前先跑它确认，别手搓 grep/看环境变量 |
 | `--dry-run` | 不调真模型走通流程，用于自测 |
 
 ## 安全

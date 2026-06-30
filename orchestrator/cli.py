@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
-from .agents import ClaudeClient, CodexClient, JsonAgent, prepare_agent_auth
+from .agents import ClaudeClient, CodexClient, JsonAgent, describe_auth, prepare_agent_auth
 from .artifacts import ArtifactLog
 from .budget import Budget
 from .config import build_arg_parser, config_from_args
@@ -31,6 +32,12 @@ def main(argv: list[str] | None = None) -> None:
     """
     args = build_arg_parser().parse_args(argv)
     setup_console()
+    if args.check_auth:
+        # 鉴权预检：只报告不注入、不真跑（复用 prepare_agent_auth 的解析逻辑）
+        print(describe_auth(args.auth_channel))
+        return
+    if not args.task:
+        sys.exit("用法：需要给出 task（要完成的需求）。仅做鉴权预检可用 --check-auth。")
     if not args.dry_run:
         # 托管子会话里为子进程配置独立鉴权；--auth-channel 选订阅额度 / API key（见 prepare_agent_auth）
         prepare_agent_auth(args.auth_channel)

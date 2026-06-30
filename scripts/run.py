@@ -77,8 +77,8 @@ def refresh_path_from_registry() -> None:
 
 
 def require_tools(argv: list[str]) -> None:
-    """校验 claude / codex 可用；缺失则清晰报错。--dry-run / --help 时跳过。"""
-    if {"--dry-run", "--help", "-h"} & set(argv):
+    """校验 claude / codex 可用；缺失则清晰报错。--dry-run / --help / --check-auth 时跳过。"""
+    if {"--dry-run", "--help", "-h", "--check-auth"} & set(argv):
         return
     missing = [t for t in ("claude", "codex") if shutil.which(t) is None]
     if missing:

@@ -66,24 +66,29 @@ def _available_channels(cfg: dict[str, str]) -> dict[str, str]:
     return out
 
 
-def _pick_channel(channel: str, available: dict[str, str], cfg: dict[str, str]) -> str | None:
-    """据请求的 channel 与可用通道决定最终通道。
+def _resolve_channel(channel: str, available: dict[str, str],
+                     cfg: dict[str, str]) -> tuple[str | None, str]:
+    """据请求的 channel 与可用通道**纯函数**地决定最终通道（不退出、不注入）。
 
-    - 显式指定 subscription/api：可用则用之；不可用则 fail-fast（不静默回落）。
-    - auto：按 CCO_DEFAULT_CHANNEL → 唯一可用 → 二者皆有时优先订阅；都没配则返回 None。
+    供 prepare_agent_auth（真实注入）与 describe_auth（--check-auth 预检）共用同一套解析，
+    避免两处逻辑漂移。
+
+    Returns:
+        tuple[str | None, str]: (选定通道或 None, 原因码/说明)。原因码：``explicit-unavailable``
+        （显式指定但缺凭据，调用方应 fail-fast）、``none-configured``（auto 且全未配），其余为人读说明。
     """
     if channel in _CHANNELS:
         if channel in available:
-            return channel
-        _fail_channel_unavailable(channel)
+            return channel, f"显式指定 {channel}"
+        return None, "explicit-unavailable"
     if not available:
-        return None
+        return None, "none-configured"
     pref = (cfg.get(_DEFAULT_CHANNEL_VAR) or os.environ.get(_DEFAULT_CHANNEL_VAR) or "").strip()
     if pref in available:
-        return pref
+        return pref, f"auto → 默认通道 CCO_DEFAULT_CHANNEL={pref}"
     if len(available) == 1:
-        return next(iter(available))
-    return "subscription"  # 两条都可用、无明确默认：优先订阅，贴合 skill 直觉
+        return next(iter(available)), "auto → 唯一可用通道"
+    return "subscription", "auto → 两条皆可用，优先订阅"  # 贴合 skill 直觉
 
 
 def _fail_channel_unavailable(channel: str) -> None:
@@ -131,9 +136,11 @@ def prepare_agent_auth(channel: str = "auto") -> None:
         return
     cfg = _read_config_file()
     available = _available_channels(cfg)
-    chosen = _pick_channel(channel, available, cfg)
+    chosen, reason = _resolve_channel(channel, available, cfg)
     if chosen is None:
-        return  # auto 且未配置任何通道：优雅 no-op，交由 _auth_hint 指引
+        if reason == "explicit-unavailable":
+            _fail_channel_unavailable(channel)  # 显式指定却缺凭据：fail-fast
+        return  # none-configured：auto 且全未配，优雅 no-op，交由 _auth_hint 指引
 
     var, name = _CHANNELS[chosen]
     value = available[chosen]
@@ -145,6 +152,59 @@ def prepare_agent_auth(channel: str = "auto") -> None:
     os.environ.pop(_OAUTH_VAR if var == _API_KEY_VAR else _API_KEY_VAR, None)  # 互斥：清掉另一通道凭据
     os.environ[var] = value
     print(f"  ℹ 检测到托管子会话：已用「{name}」为子进程配置鉴权。")
+
+
+def _mask(val: str) -> str:
+    """脱敏展示凭据：只露开头几位 + 长度，不打印完整密钥。"""
+    v = val.strip()
+    return f"{v[:6]}…，长度 {len(v)}" if len(v) > 8 else f"（长度 {len(v)}）"
+
+
+def describe_auth(channel: str = "auto") -> str:
+    """鉴权预检（`--check-auth` 用）：复用 `_resolve_channel` 的真实解析，**只报告不注入、脱敏**。
+
+    回答「这次会用哪条通道、凭据从哪来、有没有配」，避免靠手搓 grep 误判——尤其别再把「进程环境
+    变量为空」当成「没配置」（凭据是放配置文件里、由 prepare_agent_auth 直接读，本就不进 shell 环境）。
+
+    Args:
+        channel (str): 拟用的 ``--auth-channel``（auto / subscription / api）。
+
+    Returns:
+        str: 多行预检报告。
+    """
+    managed = any(k.startswith(_HOST_PREFIX) for k in os.environ)
+    cfg = _read_config_file()
+    available = _available_channels(cfg)
+    raw = os.environ.get("CCO_AUTH_FILE")
+    path = Path(raw).expanduser() if raw else Path(_AUTH_FILE).expanduser()
+
+    out = ["===== 鉴权预检（--check-auth）====="]
+    out.append(f"会话类型：{'托管子会话（需独立鉴权）' if managed else '普通会话（claude 用本机登录态即可）'}")
+    out.append(f"配置文件：{path}（{'存在' if path.is_file() else '不存在'}）")
+    out.append(f"请求通道：--auth-channel {channel}")
+    out.append("各通道凭据：")
+    for ch, (var, _name) in _CHANNELS.items():
+        src = "环境变量" if os.environ.get(var) else ("配置文件" if cfg.get(var) else None)
+        if src:
+            out.append(f"  ✓ {ch:<12}（{var}）已配置 · 来源 {src} · {_mask(available[ch])}")
+        else:
+            out.append(f"  ✗ {ch:<12}（{var}）未配置")
+
+    chosen, reason = _resolve_channel(channel, available, cfg)
+    if chosen is not None:
+        verdict = ("将使用：" + chosen + f"（{reason}）"
+                   + ("" if managed else "；但非托管会话其实无需注入，claude 用本机登录态即可"))
+        out.append("结论：✅ " + verdict)
+    elif reason == "explicit-unavailable":
+        out.append(f"结论：❌ 显式指定的 '{channel}' 缺凭据，真实运行会 fail-fast。"
+                   + _auth_hint())
+    else:  # none-configured
+        if managed:
+            out.append("结论：❌ 托管子会话但未配置任何通道，真实运行 claude -p 会 'Not logged in'。"
+                       + _auth_hint())
+        else:
+            out.append("结论：✅ 未配置独立通道，但本会话非托管，claude 用本机登录态即可，无需配置。")
+    return "\n".join(out)
 
 
 def _auth_hint() -> str:
