@@ -157,4 +157,11 @@ Python ≥ 3.10；`claude` 与 `codex` 已安装登录；目标最好是 git 仓
 
 底层分层的 `orchestrator/` 包（cli → engine → planner → agents/gates/gitrepo → prompts/graph →
 process/config/budget/artifacts/util），依赖单向无环，详见 `README.md` 的「项目结构」。
-**迭代只改仓库的 `orchestrator/` 包**，本 skill 入口无需改动；新增对外参数时同步更新本文件的参数参考。
+
+**部署与分发（自包含，可给任意用户）**：本 skill 自带 `orchestrator/` 包，run.py 靠相对布局自动
+发现、**无机器特定写死路径**——把整个 skill 目录拷给别人即开箱即用。
+- 部署/更新：在仓库根跑 `python scripts/deploy.py`（默认装到 `~/.claude/skills/agent-orchestrator`，
+  也可 `python scripts/deploy.py <目标目录>`），它会带上 orchestrator 包并自检自包含。
+- **开发迭代**：改完仓库的 `orchestrator/` 后重新 `deploy.py` 即可；想「改完即生效不必重部署」，
+  设环境变量 `AGENT_ORCHESTRATOR_HOME` 指向仓库根（run.py 会优先用它）。
+- 新增对外参数时同步更新本文件的参数参考。

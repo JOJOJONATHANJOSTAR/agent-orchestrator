@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""agent-orchestrator skill 的调用入口（仓库内 / 全局瘦部署两用）。
+"""agent-orchestrator skill 的调用入口（自包含、可分发给任意用户）。
 
-设计为「瘦指针」：不复制 orchestrator 包，而是定位到含它的仓库根并加入 sys.path——这样无论本
-脚本是在仓库里、还是被部署到 ~/.claude/skills/ 下，跑的都是仓库里的最新代码（迭代只改仓库）。
+定位含 orchestrator 包的根目录并加入 sys.path。**无机器特定的写死路径**——靠相对布局自动发现，
+两种部署形态都覆盖、对其他用户开箱即用：
+  - 仓库内：``<repo>/scripts/run.py`` + ``<repo>/orchestrator/``；
+  - 随 skill 自带：``<skill>/scripts/run.py`` + ``<skill>/orchestrator/``（用 scripts/deploy.py 部署）。
+两种布局里 orchestrator/ 都在本脚本的上一级，所以「从本脚本向上逐层查找」对二者都命中。
 
 做三件 skill 场景需要、而裸 `python -m orchestrator` 不做的事：
-  1. 定位含 orchestrator 包的仓库根（环境变量 AGENT_ORCHESTRATOR_HOME → 从本脚本向上逐层查找
-     → 已知绝对路径回退），加入 sys.path；
+  1. 定位含 orchestrator 包的根（环境变量 AGENT_ORCHESTRATOR_HOME → 从本脚本向上逐层查找），加入 sys.path；
   2. Windows 上从注册表刷新 PATH——本会话 shell 启动后才装的 claude/codex 也能被找到；
-  3. 校验 claude/codex 在 PATH，缺失时清晰报错（--dry-run / --help 跳过）。
+  3. 校验 claude/codex 在 PATH，缺失时清晰报错（--dry-run / --help / --check-auth 跳过）。
 
 随后委托 orchestrator.cli.main（其中含托管子会话的自动鉴权）。参数与 `python -m orchestrator` 一致。
 """
@@ -19,23 +21,26 @@ import shutil
 import sys
 from pathlib import Path
 
-# 仓库搬家后改这里，或设环境变量 AGENT_ORCHESTRATOR_HOME 指向仓库根
-_FALLBACK_REPO = Path(r"D:\projects\agent_corporation_framework")
 
+def find_package_root() -> Path:
+    """定位含 orchestrator 包的根目录（无写死路径，靠相对布局自动发现）。
 
-def find_repo_root() -> Path:
-    """定位含 orchestrator 包的仓库根：环境变量 → 从本脚本向上逐层查找 → 绝对路径回退。"""
+    顺序：
+      1. 环境变量 ``AGENT_ORCHESTRATOR_HOME``（开发者覆盖：指向工作仓库，改完即生效、不必重新部署）；
+      2. 从本脚本向上逐层查找 ``orchestrator/__init__.py``——同时覆盖「仓库内运行」与「随 skill
+         自带 orchestrator/」两种布局（两者该包都在 run.py 上一级）。
+    都找不到 → 清晰报错（自带包缺失说明部署不完整；或设 AGENT_ORCHESTRATOR_HOME 指向仓库）。
+    """
     env = os.environ.get("AGENT_ORCHESTRATOR_HOME")
     if env and (Path(env) / "orchestrator" / "__init__.py").is_file():
         return Path(env)
     for parent in Path(__file__).resolve().parents:
         if (parent / "orchestrator" / "__init__.py").is_file():
             return parent
-    if (_FALLBACK_REPO / "orchestrator" / "__init__.py").is_file():
-        return _FALLBACK_REPO
     sys.exit(
-        "[run] 找不到 orchestrator 包：请设置环境变量 AGENT_ORCHESTRATOR_HOME 指向仓库根，"
-        f"或修正 run.py 里的 _FALLBACK_REPO（当前 {_FALLBACK_REPO}）。"
+        "[run] 找不到 orchestrator 包。请确认二者之一：\n"
+        "  • 本 skill 目录自带 orchestrator/（应与 scripts/ 同级；用 scripts/deploy.py 部署即自动带上）；\n"
+        "  • 或设置环境变量 AGENT_ORCHESTRATOR_HOME 指向含 orchestrator/ 的仓库根。"
     )
 
 
@@ -91,7 +96,7 @@ def require_tools(argv: list[str]) -> None:
 
 
 def main() -> None:
-    sys.path.insert(0, str(find_repo_root()))
+    sys.path.insert(0, str(find_package_root()))
     refresh_path_from_registry()
     require_tools(sys.argv[1:])
     from orchestrator.cli import main as cli_main
