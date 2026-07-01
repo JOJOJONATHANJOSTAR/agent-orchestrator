@@ -41,6 +41,23 @@ def topo_order(subs: list[dict]) -> list[dict]:
     return order
 
 
+def sink_ids(subs: list[dict]) -> set[str]:
+    """「汇点」子任务的 id 集合：没有任何其他子任务把它列为前置（deps）的那些。
+
+    汇点是 DAG 的收尾节点——整体交付物只有到它们才算集齐。整体验收门（whole-deliverable
+    gate，如 `python check_site.py`）应只在汇点子任务上把关；非汇点子任务此时交付物尚不完整，
+    对它们跑整体门必然失败，会逼实现者提前把后续子任务的活也一起干了（分解就此失效）。
+
+    Args:
+        subs (list[dict]): 子任务列表，每个含 ``id`` 与 ``deps``。
+
+    Returns:
+        set[str]: 无下游依赖者的 id 集合。单节点 DAG 时即该唯一节点。
+    """
+    depended = {d for s in subs for d in s.get("deps", [])}
+    return {s["id"] for s in subs if s["id"] not in depended}
+
+
 def build_context(completed: list[dict], deps: list[str],
                   failed_deps: list[str] | None = None) -> str:
     """把当前子任务依赖到的、已完成的前置子任务，整理成给 Codex 的上下文。

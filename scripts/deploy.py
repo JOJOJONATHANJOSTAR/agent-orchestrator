@@ -19,6 +19,13 @@ import shutil
 import sys
 from pathlib import Path
 
+# Windows 控制台默认 GBK，打印 ✅/❌ 会崩；强制 stdout/stderr 用 UTF-8（失败静默降级）
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 _FILES = ["SKILL.md", "README.md", "README.en.md"]
 _DIRS = ["scripts", "orchestrator"]
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "runs", ".git", "*.egg-info")

@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # ---- 适配器（dry-run 用替身）----
     if cfg.dry_run:
-        llm, coder, gates = make_fakes()
+        llm, coder, gates = make_fakes(cfg.repo)
     else:
         llm = ClaudeClient(cfg, budget, ledger)
         coder = CodexClient(cfg, artifacts, ledger)

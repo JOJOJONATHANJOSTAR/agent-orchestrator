@@ -2,8 +2,13 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+build/
+dist/
 .venv/
 venv/
 
 # Orchestrator run artifacts (per-run logs written to runs/<timestamp>/)
 runs/
+
+# dry-run 造的 marker 文件（在临时目录跑时无所谓；在本仓库跑时避免脏工作区）
+dryrun_marker.txt

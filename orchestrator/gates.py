@@ -14,15 +14,22 @@ class GateRunner:
         self.cfg = cfg
         self.ledger = ledger
 
-    def run(self) -> tuple[bool, list[dict]]:
-        """依次执行配置的每个验收门命令。超时按未通过处理。
+    def run(self, gates: list[tuple[str, str]] | None = None) -> tuple[bool, list[dict]]:
+        """依次执行验收门命令。超时按未通过处理。
+
+        Args:
+            gates: 本次要跑的门链 ``[(名字, 命令)]``；``None`` 时用全局 ``cfg.gates``。
+                传入**空列表**表示「本子任务无客观门」（如非汇点子任务），直接返回
+                ``(True, [])``，由评审对照 acceptance_criteria 把关。
 
         Returns:
             tuple[bool, list[dict]]: (是否全部通过, 各门结果列表)。每个结果形如
-            ``{"name", "cmd", "passed", "log"}``，log 取输出末尾 2000 字符。
+            ``{"name", "cmd", "passed", "log"}``，log 取输出末尾 2000 字符。空门链时
+            列表为空、判为通过（``all([]) is True``）。
         """
+        gates = self.cfg.gates if gates is None else gates
         results = []
-        for name, cmd in self.cfg.gates:
+        for name, cmd in gates:
             t0 = time.perf_counter()
             try:
                 r = run(cmd, cwd=self.cfg.repo, shell=True,

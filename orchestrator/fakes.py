@@ -1,10 +1,15 @@
 """dry-run 用的确定性测试替身，实现与真实适配器相同的接口（LLM / Coder / Gates）。
 
-剧本（与「门过才评审」的新流程一致，收敛由 codex 实现次数驱动、按子任务重置）：
-每个子任务第 1 轮验收门 tests 挂（演示 gate_failed 重试，此时按新逻辑跳过评审）；第 2 轮 tests
-全过 → 触发评审 → pass → 完成。据此演示门链 + 门未过跳过评审 + 多轮流转，全程不调真模型。
+剧本（与「门过才评审 + 门跟子任务走」的新流程一致，收敛由 codex 实现次数驱动、按子任务重置）：
+- **汇点子任务**（跑整体门）：第 1 轮 tests 挂（演示 gate_failed 重试、此时跳过评审），第 2 轮
+  tests 全过 → 触发评审 → pass → 完成。
+- **非汇点子任务**（无客观门、review-only）：无门直接放行给评审；第 1 轮评审 revise、第 2 轮 pass。
+FakeCodex 每轮真写一个 marker 文件，让「diff 隔离 / 树快照 / 空 diff 守卫 / 评审」这条链在
+dry-run 下也被真实走到（否则无改动会触发 review-only 的空 diff 守卫而卡住）。全程不调真模型。
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 
 class _Brain:
@@ -44,11 +49,18 @@ class FakeClaude:
 
 
 class FakeCodex:
-    def __init__(self, brain: _Brain):
+    def __init__(self, brain: _Brain, repo: str = "."):
         self.brain = brain
+        self.repo = repo
 
     def implement(self, prompt: str, label: str) -> None:
         self.brain.note_impl(label)
+        # 真写一个 marker，制造非空 diff——让 diff 隔离 / 树快照 / 空 diff 守卫也被真实走到
+        try:
+            (Path(self.repo) / "dryrun_marker.txt").write_text(
+                f"{label}\n", encoding="utf-8")
+        except OSError:
+            pass
         print(f"  [dry-run] 假装 Codex 在做：{prompt[:40]}…")
 
 
@@ -56,7 +68,10 @@ class FakeGates:
     def __init__(self, brain: _Brain):
         self.brain = brain
 
-    def run(self) -> tuple[bool, list[dict]]:
+    def run(self, gates=None) -> tuple[bool, list[dict]]:
+        # 空门链（非汇点 review-only 子任务）：直接通过、无门结果，交评审把关
+        if gates is not None and len(gates) == 0:
+            return True, []
         tests_ok = self.brain.round_in_sub >= 2   # 每子任务第 1 轮挂、第 2 轮起过
         return tests_ok, [
             {"name": "lint", "cmd": "ruff check .", "passed": True, "log": "dry-run: lint 通过"},
@@ -65,6 +80,6 @@ class FakeGates:
         ]
 
 
-def make_fakes() -> tuple[FakeClaude, FakeCodex, FakeGates]:
+def make_fakes(repo: str = ".") -> tuple[FakeClaude, FakeCodex, FakeGates]:
     brain = _Brain()
-    return FakeClaude(brain), FakeCodex(brain), FakeGates(brain)
+    return FakeClaude(brain), FakeCodex(brain, repo), FakeGates(brain)

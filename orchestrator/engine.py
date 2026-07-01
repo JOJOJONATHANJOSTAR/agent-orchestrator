@@ -4,8 +4,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from .config import parse_gate_spec
 from .gates import gates_detail, gates_summary
-from .graph import build_context
+from .graph import build_context, sink_ids
 from .prompts import build_next_instruction
 
 
@@ -37,12 +38,16 @@ class SubtaskRunner:
         if self.ledger is not None:
             self.ledger.begin(phase, sid, rnd)
 
-    def run(self, subtask: dict, context: str) -> tuple[str, str | None]:
+    def run(self, subtask: dict, context: str,
+            gates: list[tuple[str, str]] | None = None) -> tuple[str, str | None]:
         """对单个子任务跑「实现→门链→评审」多轮循环，直到通过或耗尽轮数/预算。
 
         Args:
             subtask (dict): 子任务，含 id / brief / acceptance_criteria。
             context (str): 前置子任务上下文（build_context 产出）。
+            gates: 本子任务的**有效门链** ``[(名字, 命令)]``。``None`` 时退回全局 ``cfg.gates``；
+                **空列表**表示「无客观门」（非汇点子任务），改由评审对照 acceptance_criteria 把关，
+                此时要求本子任务本轮有实际改动（空 diff 不算通过）。
 
         Returns:
             tuple[str, str | None]: (状态, 最近一次全门通过的快照 tag)。状态 ∈
@@ -53,6 +58,10 @@ class SubtaskRunner:
         acceptance = subtask["acceptance_criteria"]
         instruction = brief if not context else f"{context}\n\n当前子任务：\n{brief}"
         best = None
+        eff_gates = self.cfg.gates if gates is None else gates
+        review_only = len(eff_gates) == 0        # 无客观门：全靠评审 + 「本轮须有改动」把关
+        # 子任务起点的树快照：用于把每轮 diff 隔离成「只属于本子任务」的改动（排除前置子任务）
+        base_tree = self.git.tree_snapshot()
 
         for rnd in range(1, self.cfg.max_rounds + 1):
             ok, why = self.budget.ok()
@@ -69,30 +78,36 @@ class SubtaskRunner:
             self._begin("impl", sid, rnd)
             self.coder.implement(instruction, label)
 
-            diff = self.git.diff()
+            diff = self.git.diff(base_tree)      # 相对子任务起点的隔离 diff
             self.artifacts.write(f"{label}.diff", diff)
-            if not diff.strip() and self.git.enabled:
+            has_change = bool(diff.strip()) or not self.git.enabled
+            if not has_change:
                 print("  ⚠ 本轮没有产生任何代码改动（空 diff）。")
 
             self._begin("gate", sid, rnd)
-            passed, gate_results = self.gates.run()
+            gates_ok, gate_results = self.gates.run(eff_gates)
             self.artifacts.write(f"{label}_gates.json",
                                  json.dumps(gate_results, ensure_ascii=False, indent=2))
-            print(f"  验收门链：{gates_summary(gate_results)}  →  "
-                  f"{'全过 ✅' if passed else '有未过 ❌'}")
+            if review_only:
+                print("  验收门链：（无客观门，交评审把关）"
+                      + ("" if has_change else "  →  但本轮空 diff ❌"))
+            else:
+                print(f"  验收门链：{gates_summary(gate_results)}  →  "
+                      f"{'全过 ✅' if gates_ok else '有未过 ❌'}")
 
             tag = self.git.snapshot(f"{label}_after")
             if tag:
                 print(f"  ⛳ 本轮快照可恢复：git stash apply {tag}")
-            if passed and tag:
+            if gates_ok and has_change and tag:
                 best = tag
 
             print(f"  💳 累计成本 ${self.budget.usd:.4f} | 耗时 {self.budget.elapsed():.0f}s")
 
-            # 评审只在「门全过」时进行：门没过的轮次评审基本只会说"先修门"，是低价值开销——
-            # 此时下一轮指令由门报错驱动即可（见 build_next_instruction 的 gate_failed 分支）。
-            # --no-review 则连门过后的评审也省掉，门全过即视为完成（Codex+门 纯净模式）。
-            if passed:
+            # 是否够格进评审：有客观门则以门为准；无客观门（review_only）则要求本轮有实际改动，
+            # 否则空 diff 会被评审「无据可查地放行」。门未过 / 空 diff 的轮次跳过评审——下一轮
+            # 指令由 build_next_instruction 据门报错或空 diff 驱动即可（低价值评审开销省掉）。
+            ready = gates_ok and (not review_only or has_change)
+            if ready:
                 if self.cfg.no_review:
                     verdict = {"verdict": "pass", "findings": [],
                                "comments": "(评审已禁用：门全过即通过)"}
@@ -107,9 +122,10 @@ class SubtaskRunner:
                     print(f"  ✅ 子任务 [{sid}] 完成。")
                     return "done", best
             else:
-                # 门未过：跳过评审，给 build_next_instruction 一个中性 verdict，让其走 gate_failed 分支
+                # 门未过或空 diff：跳过评审，给中性 verdict，让 build_next_instruction 走对应分支
                 verdict = {"verdict": "revise", "findings": [], "comments": ""}
-                print("  Claude 评审：已跳过（门未过，先据门报错修复）")
+                reason = "空 diff，需实际改动" if review_only and not has_change else "门未过，先据门报错修复"
+                print(f"  Claude 评审：已跳过（{reason}）")
 
             mode, instruction = build_next_instruction(
                 brief, diff, gate_results, verdict, self.git.enabled)
@@ -147,6 +163,32 @@ class DagEngine:
         self.git = git
         self.runner = runner
 
+    def _gates_for(self, st: dict, sinks: set[str]) -> tuple[list[tuple[str, str]], str]:
+        """决定某子任务的**有效门链**，以及一句人读的选择理由。
+
+        优先级：① 子任务自带 ``gate``/``gates``（廉价、只验本任务产物）→ 用它；
+        ② 否则若是**汇点**（或单节点/非 decompose）→ 用全局 ``cfg.gates``（整体验收在此把关）；
+        ③ 否则（非汇点、无自带门）→ 空门链，交评审对照 acceptance_criteria 把关。
+
+        这是修「门粒度 vs 分解粒度错配」的核心：非汇点子任务不再被整体验收门逼着提前把
+        后续子任务的活也干了。
+
+        Args:
+            st (dict): 子任务。
+            sinks (set[str]): 汇点 id 集合（graph.sink_ids）。
+
+        Returns:
+            tuple[list[tuple[str, str]], str]: (有效门链, 选择理由)。
+        """
+        own = st.get("gate") or st.get("gates")
+        if own:
+            parsed = parse_gate_spec(own)
+            if parsed:
+                return parsed, f"子任务自带门（{', '.join(n for n, _ in parsed)}）"
+        if not self.cfg.decompose or st["id"] in sinks:
+            return self.cfg.gates, "整体验收门（汇点/单任务）"
+        return [], "无客观门 → 交评审对照验收标准"
+
     def run(self, subtasks: list[dict]) -> DagResult:
         """按拓扑序逐个跑子任务，并按依赖处理失败级联。
 
@@ -162,6 +204,7 @@ class DagEngine:
         res = DagResult(initial_tag=self.git.snapshot("initial"))
         res.best_tag = res.initial_tag # 初始快照可作为回滚目标
         completed: list[dict] = []
+        sinks = sink_ids(subtasks)   # 只有汇点子任务才跑「整体验收门」
 
         for st in subtasks:
             blocked = [d for d in st["deps"] if d in res.failed]
@@ -175,8 +218,11 @@ class DagEngine:
             if blocked:
                 print(f"⚠ 前置未完成 {blocked}，--continue-on-fail 下仍尝试本子任务"
                       f"（上下文可能不完整）。")
+            eff_gates, why = self._gates_for(st, sinks)
+            if self.cfg.decompose:
+                print(f"  门策略：{why}")
             context = build_context(completed, st["deps"], blocked)
-            status, best = self.runner.run(st, context)
+            status, best = self.runner.run(st, context, eff_gates)
             if best:
                 res.best_tag = best
 

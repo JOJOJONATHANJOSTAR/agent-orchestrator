@@ -2,8 +2,56 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass
+
+# 子任务自带 gate 里 "名字=命令" 的合法名字：短标识符（避免把命令里的 = 误当成分隔）
+_GATE_NAME = re.compile(r"^[A-Za-z0-9_\-]{1,20}$")
+
+
+def parse_gate_spec(spec) -> list[tuple[str, str]]:
+    """把子任务可选的 ``gate`` / ``gates`` 字段解析成 ``[(名字, 命令)]``。
+
+    容忍多种形状：str（``"check=python x.py"`` 或裸命令 ``"pytest -q"``）、list[str]、
+    以及 list[{"name","cmd"}]。名字缺省为 ``check``（多条时 ``check1/check2…``）。只有
+    ``=`` 前是短标识符时才当成 ``名字=命令`` 拆分，否则整串当命令——避免把 ``python -c "a==1"``
+    这类命令里的 ``=`` 误判为分隔符。空/非法项被跳过。
+
+    Args:
+        spec: 子任务的 gate 字段（str / list）。
+
+    Returns:
+        list[tuple[str, str]]: 规范化的门链；无有效项时返回空列表。
+    """
+    items = spec if isinstance(spec, list) else [spec]
+    out: list[tuple[str, str]] = []
+    for g in items:
+        if isinstance(g, dict):
+            name, cmd = g.get("name"), g.get("cmd") or g.get("command")
+            if cmd:
+                out.append((str(name).strip() if name else "check", str(cmd).strip()))
+            continue
+        if not isinstance(g, str) or not g.strip():
+            continue
+        g = g.strip()
+        head, sep, tail = g.partition("=")
+        if sep and _GATE_NAME.match(head.strip()):
+            out.append((head.strip(), tail.strip()))
+        else:
+            out.append(("check", g))
+    # 给重名的门加序号，避免报告网格里同名（如多条 "check"）撞行
+    counts: dict[str, int] = {}
+    for n, _ in out:
+        counts[n] = counts.get(n, 0) + 1
+    seen: dict[str, int] = {}
+    result = []
+    for name, cmd in out:
+        if counts[name] > 1:
+            seen[name] = seen.get(name, 0) + 1
+            name = f"{name}{seen[name]}"
+        result.append((name, cmd))
+    return result
 
 DEFAULTS = {
     "repo": ".",                 # 目标仓库路径
