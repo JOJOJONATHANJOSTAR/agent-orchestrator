@@ -21,10 +21,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure git identity (dry-run 的每轮快照 git stash create 需要)
+      - name: Configure git identity (--global 让测试建的临时 git 仓库也继承身份，否则 commit 报 Author identity unknown)
         run: |
-          git config user.email "ci@example.com"
-          git config user.name "CI"
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
