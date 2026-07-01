@@ -28,9 +28,9 @@ dev = ["pytest>=7"]
 agent-orchestrate = "orchestrator.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/JOJOJONATHANJOSTAR/agent_corporation_framework"
-Repository = "https://github.com/JOJOJONATHANJOSTAR/agent_corporation_framework"
-Issues = "https://github.com/JOJOJONATHANJOSTAR/agent_corporation_framework/issues"
+Homepage = "https://github.com/JOJOJONATHANJOSTAR/agent-orchestrator"
+Repository = "https://github.com/JOJOJONATHANJOSTAR/agent-orchestrator"
+Issues = "https://github.com/JOJOJONATHANJOSTAR/agent-orchestrator/issues"
 
 [tool.setuptools]
 packages = ["orchestrator"]
