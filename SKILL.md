@@ -126,7 +126,8 @@ Python ≥ 3.10；`claude` 与 `codex` 已安装登录；目标最好是 git 仓
 - **首次/未配置**（`--check-auth` 报未配置时）：引导用户一次性配置。问"用订阅额度还是 API key（可都配）"；
   选订阅 → 让其在普通终端跑 `claude setup-token` 并回贴 token，你写入配置文件
   `CLAUDE_CODE_OAUTH_TOKEN=...`；选 API → 写 `ANTHROPIC_API_KEY=...`。可顺手写 `CCO_DEFAULT_CHANNEL=...`
-  定默认，并提示锁文件权限（`icacls`）。**订阅通道绕不开 `setup-token` 这一步**（宿主订阅态不落地）。
+  定默认，并提示锁文件权限（Windows 用 `icacls`，Mac/Linux 用 `chmod 600`）。**订阅通道绕不开
+  `setup-token` 这一步**（宿主订阅态不落地）。
 - **两条都配好后**：平时静默走默认（不每次问）。**只在"该选"时主动浮出选项**——大任务 / `--decompose`
   多轮时提示"可能撞订阅限额，建议本次 `--auth-channel api`"；小改默认订阅即可。用户一句"这次用 key /
   用订阅"就装配对应 `--auth-channel` 覆盖单次。
