@@ -9,7 +9,7 @@ description = "Claude 规划 + Codex 实现 的多 agent 编码编排器（orche
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Jonathan Li", email = "Jonathan.work9811@gmail.com" }]
+authors = [{ name = "Zhenye Li", email = "Jonathan.work9811@gmail.com" }]
 keywords = ["llm", "agent", "orchestrator", "claude", "codex", "codegen", "multi-agent", "orchestrator-worker"]
 classifiers = [
     "Programming Language :: Python :: 3",
