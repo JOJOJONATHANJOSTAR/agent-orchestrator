@@ -6,7 +6,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .agents import ClaudeClient, CodexClient, JsonAgent, describe_auth, prepare_agent_auth
+from .agents import (ClaudeClient, CodexClient, JsonAgent, describe_auth,
+                     prepare_agent_auth, setup_auth)
 from .artifacts import ArtifactLog
 from .budget import Budget
 from .config import build_arg_parser, config_from_args
@@ -32,6 +33,10 @@ def main(argv: list[str] | None = None) -> None:
     """
     args = build_arg_parser().parse_args(argv)
     setup_console()
+    if args.setup_auth:
+        # 交互式凭据向导：由用户本人运行，助手不代跑、不接触密钥
+        setup_auth()
+        return
     if args.check_auth:
         # 鉴权预检：只报告不注入、不真跑（复用 prepare_agent_auth 的解析逻辑）
         print(describe_auth(args.auth_channel))
@@ -62,7 +67,13 @@ def main(argv: list[str] | None = None) -> None:
     # ---- 领域 + 编排（依赖注入装配）----
     agent = JsonAgent(llm, artifacts, cfg.json_retries)
     planner = Planner(agent)
-    reviewer = Reviewer(agent)
+    # 评审可用专用的省额度小模型（--review-model）：真实运行且指定时，单独建评审 agent
+    if cfg.review_model and not cfg.dry_run:
+        review_agent = JsonAgent(
+            ClaudeClient(cfg, budget, ledger, model=cfg.review_model), artifacts, cfg.json_retries)
+    else:
+        review_agent = agent
+    reviewer = Reviewer(review_agent)
     runner = SubtaskRunner(cfg, budget, artifacts, git, coder, gates, reviewer, ledger)
     engine = DagEngine(cfg, git, runner)
 

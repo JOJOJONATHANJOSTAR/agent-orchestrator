@@ -70,6 +70,8 @@ DEFAULTS = {
     "continue_on_fail": False,   # 子任务失败时，是否仍尝试其下游（默认级联跳过）
     "no_plan": False,            # 跳过 Claude 规划：需求原文当 brief、验收门当标准（小任务省开销）
     "no_review": False,          # 跳过 Claude 评审：门全过即完成（Codex+门 纯净模式）
+    "review_context_budget": 40000,  # 评审输入(diff)裁剪的字符预算；订阅额度友好，0=不裁剪
+    "review_model": None,        # 只给评审用的 claude 模型（如订阅上用更省的小模型）；None=沿用 --model
 }
 
 
@@ -95,6 +97,8 @@ class Config:
     dry_run: bool
     no_plan: bool
     no_review: bool
+    review_context_budget: int
+    review_model: str | None
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -141,10 +145,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-review", action="store_true",
                     help="跳过 Claude 评审：验收门全过即视为完成（Codex+门 纯净模式，适合有可信验收门的小改）。"
                          "注意：默认行为已是「门过才评审」，本项更进一步连最终评审也省掉")
+    ap.add_argument("--review-context-budget", type=int,
+                    default=DEFAULTS["review_context_budget"],
+                    help="评审输入(diff)裁剪的字符预算：超预算按验收相关性保留、其余只留统计，"
+                         "让评审在订阅额度的上下文限制下也跑得起（默认 40000，0=不裁剪）")
+    ap.add_argument("--review-model", default=DEFAULTS["review_model"],
+                    help="只给评审用的 claude 模型（如订阅上用更省的小模型省额度）；默认沿用 --model")
     ap.add_argument("--dry-run", action="store_true",
                     help="用假 agent 走通流程（不真调模型，便于自测）")
     ap.add_argument("--check-auth", action="store_true",
                     help="只做鉴权预检：报告会用哪条通道、凭据从哪来（脱敏），不真跑、不需 task")
+    ap.add_argument("--setup-auth", action="store_true",
+                    help="交互式凭据配置向导（由用户本人在普通终端运行）：隐藏输入 token/key，"
+                         "写入本机配置文件并收紧权限。助手不应代跑、也不应接触密钥")
     ap.add_argument("--auth-channel", choices=["auto", "subscription", "api"],
                     default="auto",
                     help="托管子会话下 headless claude 的鉴权通道："
@@ -186,4 +199,6 @@ def config_from_args(args: argparse.Namespace) -> Config:
         continue_on_fail=args.continue_on_fail,
         decompose=args.decompose, dry_run=args.dry_run,
         no_plan=args.no_plan, no_review=args.no_review,
+        review_context_budget=args.review_context_budget,
+        review_model=args.review_model,
     )

@@ -23,6 +23,7 @@ from orchestrator.config import parse_gate_spec              # noqa: E402
 from orchestrator.engine import DagEngine                    # noqa: E402
 from orchestrator.gitrepo import GitRepo                     # noqa: E402
 from orchestrator.graph import sink_ids                      # noqa: E402
+from orchestrator.trim import trim_for_review, trim_gate_log  # noqa: E402
 
 _fails: list[str] = []
 
@@ -112,9 +113,47 @@ def test_diff_isolation() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _mkdiff(path: str, nlines: int) -> str:
+    body = "".join(f"+line {i} in {path}\n" for i in range(nlines))
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,{nlines} @@\n{body}"
+
+
+def test_trim_for_review() -> None:
+    print("[trim_for_review 上下文瘦身]")
+    # 预算充足 / 关闭 → 原样返回
+    small = _mkdiff("app.py", 3)
+    check(trim_for_review(small, ["改 app.py"], 40000) == small, "够小则原样返回")
+    check(trim_for_review(small, [], 0) == small, "budget=0 不裁剪")
+
+    # 噪声文件（lockfile）被降级为只留统计，相关源码文件全文保留
+    big_lock = _mkdiff("package-lock.json", 4000)
+    rel = _mkdiff("login.py", 5)
+    combined = big_lock + rel
+    out = trim_for_review(combined, ["实现 login.py 的登录"], 4000)
+    check(len(out) <= 4000 + 800, "裁剪后不超预算(含横幅余量)")
+    check("login.py" in out and "+line 0 in login.py" in out, "相关源码文件全文保留")
+    check("package-lock.json" in out and "已省略" in out, "lockfile 降为只留统计")
+    check("已裁剪" in out, "含裁剪说明横幅")
+
+    # 相关性排序：验收标准点名的文件优先于无关文件
+    out2 = trim_for_review(_mkdiff("misc.py", 300) + _mkdiff("target.py", 300),
+                           ["修改 target.py"], 3500)
+    check(out2.index("target.py") < (out2.index("misc.py") if "misc.py" in out2 else 10**9),
+          "验收相关文件优先保留/靠前")
+
+
+def test_trim_gate_log() -> None:
+    print("[trim_gate_log]")
+    check(trim_gate_log("short log") == "short log", "够短原样返回")
+    big = "HEAD" + "x" * 9000 + "TAIL"
+    t = trim_gate_log(big, cap=3000)
+    check(len(t) < len(big) and t.startswith("HEAD") and t.endswith("TAIL"), "超长保留头尾")
+    check("已裁剪" in t, "含裁剪标记")
+
+
 def main() -> int:
     for t in (test_sink_ids, test_parse_gate_spec, test_gates_for_routing,
-              test_diff_isolation):
+              test_diff_isolation, test_trim_for_review, test_trim_gate_log):
         t()
     print()
     if _fails:

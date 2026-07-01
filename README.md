@@ -95,15 +95,19 @@ orchestrator/
 - 工作区最好是干净的，方便用 `git diff` 看本轮改动
 - 配好验收门命令（默认 `pytest -q`）
 
-> **托管子会话下的鉴权**：在 Claude Code 托管子会话里跑时，宿主登录态不落地为 CLI 可读凭据，
-> 子进程 `claude -p` 会 `Not logged in`。入口会自动处理：据 `--auth-channel` 选一条独立通道，
-> 注入凭据并剥离宿主会话变量（`CLAUDE_CODE_*` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`）。
-> 两条通道，凭据来自环境变量或配置文件 `~/.claude_codex_orchestrator.env`：
-> - `subscription`（订阅额度）：`CLAUDE_CODE_OAUTH_TOKEN=...`（普通终端 `claude setup-token` 获取）
-> - `api`（API 计费）：`ANTHROPIC_API_KEY=sk-ant-...`
+> **托管子会话下的鉴权**：仅当在 Claude Code 托管子会话里跑（skill 方式）时才需要——宿主登录态
+> 不落地为 CLI 可读凭据，子进程 `claude -p` 会 `Not logged in`。**普通终端里 `claude /login` 后直接
+> 用，无需任何配置。**
 >
-> `--auth-channel` 取 `auto`（默认，按 `CCO_DEFAULT_CHANNEL`/唯一可用/二者皆有时优先订阅）/
-> `subscription` / `api`；显式通道缺凭据时 fail-fast。一次性配置即可；该配置文件含密钥，请勿入库。
+> 需要时，**你自己**一条命令配置（凭据只留本机、`getpass` 隐藏输入、不进 shell 历史/日志）：
+> ```bash
+> agent-orchestrate --setup-auth      # 向导：选通道 → 隐藏输入 token/key → 写入并收紧权限
+> agent-orchestrate --check-auth      # 之后随时预检：会用哪条通道、有没有配（脱敏）
+> ```
+> ⚠️ **不要让 AI 助手替你写这个凭据文件、也不要把 token 贴进对话**——那是隐私敏感操作，助手会拒绝。
+> 两条通道：`subscription`（订阅额度，`CLAUDE_CODE_OAUTH_TOKEN`，来自 `claude setup-token`）/
+> `api`（API 计费，`ANTHROPIC_API_KEY`）。运行时 `--auth-channel auto|subscription|api` 选用。
+> 配置写在 `~/.claude_codex_orchestrator.env`（含密钥，**请勿入库**）。
 
 ## 用法
 
@@ -167,6 +171,8 @@ python claude_codex_orchestrator.py "随便写点啥" --dry-run
 | `--decompose` | 关 | 先把需求拆成子任务 DAG，按拓扑序逐个实现（失败只影响其下游） |
 | `--no-plan` | 关 | 跳过 Claude 规划：需求原文当 brief、验收门当验收标准（小/清晰任务省开销；与 `--decompose` 互斥） |
 | `--no-review` | 关 | 跳过 Claude 评审：门全过即视为完成（Codex+门 纯净模式）。注：默认已是「门过才评审」 |
+| `--review-context-budget` | `40000` | 评审输入(diff)裁剪字符预算：超预算按验收相关性保留、其余只留统计，让评审在**订阅额度**上下文限制下也跑得起（0=不裁剪） |
+| `--review-model` | 默认 | 只给评审用的 claude 模型（订阅上可用更省额度的小模型）；默认沿用 `--model` |
 | `--dry-run` | 关 | 用假 agent 走通流程，不真调模型 |
 | `--check-auth` | 关 | 鉴权预检：脱敏报告会用哪条通道、凭据从哪来、有没有配；不真跑、不需 task |
 

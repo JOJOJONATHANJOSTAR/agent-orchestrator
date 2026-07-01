@@ -94,16 +94,13 @@ def _resolve_channel(channel: str, available: dict[str, str],
 def _fail_channel_unavailable(channel: str) -> None:
     """显式请求的通道缺凭据时，清晰报错并退出（避免漏到宿主网关再撞含糊的 'Not logged in'）。"""
     var = _CHANNELS[channel][0]
-    if channel == "subscription":
-        how = (f"在普通终端跑 `claude setup-token`，把输出的 token 写入 {_AUTH_FILE}："
-               f"{_OAUTH_VAR}=...")
-        other = "api"
-    else:
-        how = (f"写入 {_AUTH_FILE}：{_API_KEY_VAR}=sk-ant-...（或 setx 同名环境变量）")
-        other = "subscription"
+    other = "api" if channel == "subscription" else "subscription"
+    pre = ("订阅通道需先在普通终端跑 `claude setup-token` 拿到 token。\n  "
+           if channel == "subscription" else "")
     sys.exit(
         f"[auth] 指定的鉴权通道 '{channel}' 不可用：未找到 {var}。\n"
-        f"  配置方法：{how}\n"
+        f"  配置方法（推荐，凭据只留本机、你自己一条命令）：{pre}"
+        f"在普通终端跑 `agent-orchestrate --setup-auth`，按提示隐藏输入凭据。\n"
         f"  或改用另一条通道：--auth-channel {other}（若已配置）。"
     )
 
@@ -152,6 +149,75 @@ def prepare_agent_auth(channel: str = "auto") -> None:
     os.environ.pop(_OAUTH_VAR if var == _API_KEY_VAR else _API_KEY_VAR, None)  # 互斥：清掉另一通道凭据
     os.environ[var] = value
     print(f"  ℹ 检测到托管子会话：已用「{name}」为子进程配置鉴权。")
+
+
+def _auth_file_path() -> Path:
+    raw = os.environ.get("CCO_AUTH_FILE")
+    return Path(raw).expanduser() if raw else Path(_AUTH_FILE).expanduser()
+
+
+def setup_auth() -> None:
+    """交互式凭据配置向导——由【用户本人】在普通终端运行（`--setup-auth`）。
+
+    重要：助手不应代跑本向导、也不应替用户把密钥写进文件——帮用户落地密钥属于隐私敏感操作，
+    别的用户的 Claude 会（应当）拒绝。本向导让用户自己一条命令搞定：用 getpass **隐藏输入**
+    （密钥不回显、不进 shell 历史、不进对话/日志），与现有配置合并后写入本机文件并收紧权限。
+
+    仅在「托管子会话」（在 Claude Code 里跑本 skill、复用不了宿主登录）时需要；普通终端里
+    直接 `claude /login` 即可，无需配置。
+    """
+    import getpass
+
+    path = _auth_file_path()
+    existing = _read_config_file()   # 合并写：不清掉已配好的另一条通道
+
+    print("===== 凭据配置向导（--setup-auth）=====")
+    print(f"将写入本机文件：{path}")
+    print("· 凭据只留在你本机；输入用 getpass 隐藏（不回显 / 不进 shell 历史 / 不进日志）。")
+    print("· 仅「在 Claude Code 里跑本 skill」时需要；普通终端 `claude /login` 即可，无需配。\n")
+    print("要配置哪条鉴权通道？")
+    print("  1) 订阅额度  CLAUDE_CODE_OAUTH_TOKEN（来自 `claude setup-token`，吃订阅额度）")
+    print("  2) API key   ANTHROPIC_API_KEY（按 API 计费）")
+    print("  3) 两条都配")
+    choice = (input("选择 1 / 2 / 3（回车默认 1）：").strip() or "1")
+
+    updated = dict(existing)
+    if choice in ("1", "3"):
+        print("\n[订阅] 请先在另一个普通终端运行 `claude setup-token`，")
+        print("       再把它输出的 token 粘到这里（输入时不显示）：")
+        tok = getpass.getpass("  CLAUDE_CODE_OAUTH_TOKEN = ").strip()
+        if tok:
+            updated[_OAUTH_VAR] = tok
+        else:
+            print("  （空输入，跳过订阅通道）")
+    if choice in ("2", "3"):
+        key = getpass.getpass("  ANTHROPIC_API_KEY = ").strip()
+        if key:
+            updated[_API_KEY_VAR] = key
+        else:
+            print("  （空输入，跳过 API 通道）")
+
+    if not (updated.get(_OAUTH_VAR) or updated.get(_API_KEY_VAR)):
+        sys.exit("未输入任何凭据，未写入文件。")
+
+    if updated.get(_OAUTH_VAR) and updated.get(_API_KEY_VAR):
+        d = input("两条都配了，默认用哪条？subscription / api（回车默认 subscription）：").strip()
+        updated[_DEFAULT_CHANNEL_VAR] = "api" if d == "api" else "subscription"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{k}={v}\n" for k, v in updated.items()), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)   # POSIX：仅本人可读写
+    except OSError:
+        pass
+    if os.name == "nt":         # Windows：用 icacls 收紧到当前用户（best-effort）
+        user = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+        if user:
+            run(["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"])
+
+    configured = [c for c in ("subscription", "api") if updated.get(_CHANNELS[c][0])]
+    print(f"\n✅ 已写入 {path}（权限已收紧到仅本人）。已配置通道：{', '.join(configured)}")
+    print("   验证：agent-orchestrate --check-auth")
 
 
 def _mask(val: str) -> str:
@@ -222,12 +288,10 @@ def _auth_hint() -> str:
     if managed:
         lines += [
             "    检测到托管子会话：headless claude 无法复用宿主登录态，需配置一条独立鉴权通道。",
-            f"    一次性写入 {_AUTH_FILE} 即可（之后每次自动生效）：",
-            "      • 订阅额度（不走 API 计费）：先 `claude setup-token`，再写 "
-            f"{_OAUTH_VAR}=...",
-            f"      • API 计费：写 {_API_KEY_VAR}=sk-ant-...",
-            f"    两条都配后，可用 --auth-channel subscription|api 每次任选，或用 "
-            f"{_DEFAULT_CHANNEL_VAR}=... 设默认。",
+            "    ✅ 推荐（凭据只留本机、你自己一条命令、助手不接触密钥）：",
+            "       在普通终端跑  agent-orchestrate --setup-auth  ——向导会隐藏输入 token/key、",
+            "       写入本机文件并收紧权限。订阅通道会提示你先跑 `claude setup-token`。",
+            "    两条都配后，可用 --auth-channel subscription|api 每次任选，或在向导里设默认。",
         ]
     else:
         lines += ["    请在终端先执行 `claude /login` 完成登录，或设置 ANTHROPIC_API_KEY。"]
@@ -260,10 +324,11 @@ class Coder(Protocol):
 class ClaudeClient:
     """headless 调 Claude，只读工具，累计成本到 budget，并把 token/成本/耗时记入 ledger。"""
 
-    def __init__(self, cfg, budget, ledger=None):
+    def __init__(self, cfg, budget, ledger=None, model=None):
         self.cfg = cfg
         self.budget = budget
         self.ledger = ledger
+        self.model = model or cfg.model   # 可覆盖（如评审专用的省额度小模型）
 
     def ask_text(self, prompt: str, system: str) -> str:
         """headless 调用 Claude 并累计成本。
@@ -286,8 +351,8 @@ class ClaudeClient:
             "--append-system-prompt", system,
             "--allowedTools", "Read,Grep,Glob",   # 只读：写代码只交给 Codex
         ]
-        if self.cfg.model:
-            cmd += ["--model", self.cfg.model]
+        if self.model:
+            cmd += ["--model", self.model]
         t0 = time.perf_counter()
         r = run(cmd, cwd=self.cfg.repo, timeout=self.cfg.claude_timeout,
                 input=prompt.encode("utf-8"))
@@ -306,7 +371,7 @@ class ClaudeClient:
         if self.ledger is not None:
             u = data.get("usage") or {}
             self.ledger.record(
-                "claude", model=str(data.get("model") or self.cfg.model or ""),
+                "claude", model=str(data.get("model") or self.model or ""),
                 input_tokens=int(u.get("input_tokens") or 0),
                 output_tokens=int(u.get("output_tokens") or 0),
                 cache_read=int(u.get("cache_read_input_tokens") or 0),

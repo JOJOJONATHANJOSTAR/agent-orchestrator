@@ -8,6 +8,7 @@ from .config import parse_gate_spec
 from .gates import gates_detail, gates_summary
 from .graph import build_context, sink_ids
 from .prompts import build_next_instruction
+from .trim import trim_for_review, trim_gate_log
 
 
 class SubtaskRunner:
@@ -114,8 +115,13 @@ class SubtaskRunner:
                     print("  Claude 评审：已跳过（--no-review，门全过即完成）")
                 else:
                     self._begin("review", sid, rnd)
+                    # 上下文瘦身：把 diff / 门日志裁剪到预算内，让评审在订阅额度下也跑得起
+                    rdiff = trim_for_review(diff, acceptance, self.cfg.review_context_budget)
+                    if len(rdiff) < len(diff):
+                        print(f"  ✂ 评审上下文裁剪：diff {len(diff)}→{len(rdiff)} 字符"
+                              f"（订阅友好；完整 diff 见 {label}.diff）")
                     verdict = self.reviewer.review(
-                        acceptance, diff, gates_detail(gate_results), label)
+                        acceptance, rdiff, trim_gate_log(gates_detail(gate_results)), label)
                     print(f"  Claude 评审：{verdict['verdict']}"
                           + (f"（{len(verdict['findings'])} 条意见）" if verdict["findings"] else ""))
                 if verdict["verdict"] == "pass":
