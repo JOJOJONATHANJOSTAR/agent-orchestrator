@@ -1,0 +1,10 @@
+# 全部文本文件在仓库内统一用 LF，避免跨平台 CRLF/LF 抖动（Windows 检出也保持 LF）
+* text=auto eol=lf
+
+# 二进制文件不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
